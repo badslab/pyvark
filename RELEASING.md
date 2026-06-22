@@ -56,22 +56,19 @@ unzip -p dist/pyvark-X.Y.Z-py3-none-any.whl \
 # 6. Upload to TestPyPI first (catches metadata bugs before they're permanent)
 uvx twine upload --repository testpypi dist/*
 
-# 7. Verify the test upload
-uv run --quiet --with-index https://test.pypi.org/simple/ \
+# 7. Verify the test upload (the `python -c` runs INSIDE the uv-managed env;
+#    `uv run -c …` does NOT work — `-c` is python's flag, not uv's)
+uv run --quiet --index-url https://test.pypi.org/simple/ \
        --extra-index-url https://pypi.org/simple/ \
-       --with pyvark==X.Y.Z --no-project --python 3.11 - <<'PY'
-from vark import AnthiveClient
-print(AnthiveClient.API_TARGET)
-PY
+       --with pyvark==X.Y.Z --no-project --python 3.11 \
+       python -c "from vark import AnthiveClient; print(AnthiveClient.API_TARGET)"
 
 # 8. Upload to real PyPI
 uvx twine upload dist/*
 
 # 9. Verify from clean machine
-uv run --quiet --with pyvark==X.Y.Z --no-project --python 3.11 - <<'PY'
-from vark import AnthiveClient
-print(AnthiveClient.API_TARGET)
-PY
+uv run --quiet --with pyvark==X.Y.Z --no-project --python 3.11 \
+       python -c "from vark import AnthiveClient; print(AnthiveClient.API_TARGET)"
 ```
 
 ## Versioning
