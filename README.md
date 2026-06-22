@@ -1,4 +1,4 @@
-<p align="center"><img src="doc/logo.png" alt="pyvark" width="200"></p>
+<p align="center"><img src="https://codeberg.org/mfiers/pyvark/raw/branch/main/doc/logo.png" alt="pyvark" width="200"></p>
 
 # pyvark
 
