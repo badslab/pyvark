@@ -3,6 +3,20 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## Unreleased
+
+### Docs
+
+- Expanded the **"Reusing vark CLI credentials"** README section into a
+  definitive reference: explicit WHY (age-encrypted store, no password
+  literals in notebooks), one-time Go-CLI setup walkthrough
+  (`vark server login`), a `vark_config=` mode table, and a
+  troubleshooting block (401 from a fresh-install placeholder
+  `secrets.age`, `NoSuchEntryError` URL-mismatch, missing
+  `[vark-config]` extras). The section is the anchor target of
+  auto-generated anthive notebooks
+  (`https://codeberg.org/mfiers/pyvark#reusing-vark-cli-credentials`).
+
 ## 0.2.0 — 2026-06-22
 
 ### Added

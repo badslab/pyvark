@@ -85,38 +85,90 @@ print(plot["caption"])
 
 ## Reusing vark CLI credentials
 
-If you already use the [Go `vark` CLI](https://codeberg.org/mfiers/vark)
-you don't need to re-enter passwords here. With the `vark-config` extras
-installed, `AnthiveClient` reads `~/.config/vark/config.yaml` and
-decrypts `~/.config/vark/secrets.age` (age / X25519) on construction:
+Anthive credentials are stored **once** by the Go [`vark`](https://codeberg.org/mfiers/vark)
+CLI — username + password are encrypted at rest with [age](https://age-encryption.org)
+(modern X25519 + ChaCha20-Poly1305) into `~/.config/vark/secrets.age`.
+`pyvark` reads from that same store, so a notebook or script never
+needs a password literal, an environment variable, or a `getpass()`
+prompt.
+
+### One-time setup (Go CLI side)
+
+Install the Go [`vark`](https://codeberg.org/mfiers/vark) binary, then
+register your server:
 
 ```sh
-pip install "pyvark[vark-config]"   # adds pyrage + PyYAML
+vark server login --name myserver \
+                  --url https://my.anthive.example/api \
+                  --user me
+# → prompts for the password; encrypts it into ~/.config/vark/secrets.age
+vark server ls          # confirm the entry is there
 ```
+
+That writes two files:
+
+- `~/.config/vark/config.yaml` — the server registry (name, URL, user,
+  `insecure:` flag).
+- `~/.config/vark/secrets.age` — age-encrypted password store.
+
+### Install the pyvark extras
+
+```sh
+pip install "pyvark[vark-config]"   # adds pyrage (age) + PyYAML
+```
+
+The base install of `pyvark` is unchanged; the extras are only needed
+for credential discovery.
+
+### Use it from Python
+
+**Auto-discover by URL** — no `auth=` argument, no password in code:
 
 ```python
 from vark import AnthiveClient
 
-# Auto-discover: matches the URL against the Go CLI's server registry.
-client = AnthiveClient("https://my.anthive/api")
-# → uses (user, password) from the matching entry, and demotes
-#   `verify` to False when the entry has `insecure: true`.
-
-# Or look up by registered server name:
-client = AnthiveClient.from_vark_server("intern")
+client = AnthiveClient("https://my.anthive.example/api")
+# pyvark matches the URL against `vark server ls`, pulls
+# (user, password) from secrets.age, and (if insecure: true is set
+# on the entry) demotes `verify` to False automatically.
 ```
 
-Constructor knob — `vark_config=`:
+**Look up by registered name** — handy when you don't want a URL
+hard-coded in the notebook:
 
-- `None` (default): auto; silently no-op when the config dir / extras
-  are missing.
-- `True`: require — raise `VarkConfigError` if no entry matches.
-- `False`: skip discovery entirely.
-- `str | Path`: use that directory instead of `~/.config/vark/`.
+```python
+client = AnthiveClient.from_vark_server("myserver")
+```
 
-Passing `auth=` explicitly always wins; vark-config discovery never
-overrides it. Pyodide / JupyterLite skip discovery automatically
-(there's no filesystem to read).
+### The `vark_config=` constructor knob
+
+| Value         | Behaviour                                                          |
+| ------------- | ------------------------------------------------------------------ |
+| `None`        | **Default.** Auto-discover; silently no-op if the config dir or extras are missing. |
+| `True`        | **Require.** Raise `VarkConfigError` if no entry matches the URL.  |
+| `False`       | **Skip.** Never read `~/.config/vark/`, even if it exists.         |
+| `str` / `Path`| Use that directory instead of `~/.config/vark/` (useful for tests / portable setups). |
+
+Explicit `auth=(user, password)` always wins — vark-config discovery
+never overrides a caller-supplied auth. Pyodide / JupyterLite skip
+discovery automatically (no filesystem in the browser).
+
+### Troubleshooting
+
+- **`401 Unauthorized` on the first request.** Did you actually run
+  `vark server login` for this server? A fresh `vark` install lays
+  down a placeholder `secrets.age` that decrypts cleanly but contains
+  no real password — the server then 401s. Re-run `vark server login`
+  to overwrite it.
+- **`NoSuchEntryError` (or "no matching server entry").** The URL
+  passed to `AnthiveClient()` doesn't match any entry in
+  `vark server ls`. URLs are normalised (trailing slash stripped, host
+  case-folded) before matching, so it's almost always a typo or a
+  missing `/api` suffix — compare `vark server ls` output against
+  your constructor argument character-for-character.
+- **`ImportError: pyrage` or `ImportError: yaml`.** You installed the
+  base `pyvark` without the extras. Fix:
+  `pip install "pyvark[vark-config]"`.
 
 ## API coverage (highlights)
 
