@@ -1,3 +1,5 @@
+<p align="center"><img src="doc/logo.png" alt="pyvark" width="200"></p>
+
 # pyvark
 
 Python client for the [Anthive](https://codeberg.org/mfiers/anthive4)
