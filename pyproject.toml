@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyvark"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python REST client for the Anthive single-cell RNA-seq browser (sibling of the Go `vark` CLI)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,10 +37,18 @@ dependencies = [
 
 [project.optional-dependencies]
 pandas = ["pandas>=1.3.0"]
+# Reuse credentials stored by the Go vark CLI (`~/.config/vark/`):
+# pyrage decrypts secrets.age (X25519 / age), PyYAML reads config.yaml.
+vark-config = [
+    "pyrage>=1.0",
+    "PyYAML>=6.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pandas>=1.3.0",
+    "pyrage>=1.0",
+    "PyYAML>=6.0",
 ]
 
 [project.urls]

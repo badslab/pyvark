@@ -18,13 +18,30 @@ Requirements:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import requests
 
+from ._credentials import (
+    VarkConfigError,
+    find_vark_credentials_for,
+    find_vark_server_by_name,
+)
 
-__version__ = "0.1.0"
-__all__ = ["AnthiveClient"]
+
+__version__ = "0.2.0"
+__all__ = ["AnthiveClient", "VarkConfigError"]
+
+
+def _is_pyodide() -> bool:
+    """Detect Pyodide / Emscripten so we can skip filesystem credential
+    discovery in the browser (``~/.config/vark/`` doesn't exist there)."""
+    if 'pyodide' in sys.modules:
+        return True
+    import platform
+    return platform.system() == 'Emscripten'
 
 
 # ── Optional Streamlit caching ────────────────────────────────────────────────
@@ -118,9 +135,27 @@ class AnthiveClient:
         timeout: per-request timeout (seconds). Default 30.
         auth: HTTP authentication, passed straight through to ``requests``.
             Use ``(user, password)`` for HTTP Basic; or any
-            ``requests.auth.AuthBase`` subclass.
+            ``requests.auth.AuthBase`` subclass. **Explicit ``auth=``
+            always wins** — vark-config discovery never overrides it.
         verify: TLS-verify flag forwarded to ``requests`` (default ``True``).
             Set to ``False`` when hitting a server with a self-signed cert.
+        vark_config: How to handle credential discovery from the Go vark
+            CLI's local config (``~/.config/vark/`` by default). Only
+            consulted when ``auth`` is ``None``.
+
+            - ``None`` (default): try discovery, silently fall back when
+              the vark config is absent or the ``vark-config`` extras
+              aren't installed.
+            - ``True``: require discovery — raise
+              :class:`VarkConfigError` when no credentials for
+              ``base_url`` are found.
+            - ``False``: skip discovery entirely (don't read anything).
+            - ``str | Path``: use that directory instead of
+              ``~/.config/vark/``.
+
+            When discovery finds a server with ``insecure: true``, the
+            client's ``verify`` is demoted to ``False`` (unless the
+            caller passed an explicit ``verify=`` already).
 
     Example::
 
@@ -129,6 +164,13 @@ class AnthiveClient:
                           auth=("user", "pass"))
         info = c.get_version()
         print(info["version"], info["plot_geoms"])
+
+    Example (reuse Go vark CLI credentials)::
+
+        # Requires the `vark-config` extras + the Go CLI's local config.
+        c = AnthiveClient("https://my.anthive.example/api")
+        # OR by registered server name:
+        c = AnthiveClient.from_vark_server("intern")
     """
 
     #: Anthive REST API version this client release was last verified against.
@@ -157,6 +199,7 @@ class AnthiveClient:
         timeout: int = 30,
         auth: Optional[Any] = None,
         verify: Union[bool, str] = True,
+        vark_config: Union[str, Path, bool, None] = None,
     ):
         if base_url is None:
             import os
@@ -178,6 +221,33 @@ class AnthiveClient:
         self.headers: Dict[str, str] = {}
         self.auth = auth
         self.verify = verify
+
+        # vark-config discovery — only when caller did NOT pass explicit auth.
+        # Explicit `auth=` always wins; vark_config=False skips entirely;
+        # browser/Pyodide always skips (no filesystem to read).
+        if auth is None and vark_config is not False and not _is_pyodide():
+            if vark_config is True:
+                # Require: raise loudly if nothing matches.
+                required = True
+                cfg_dir: Optional[Union[str, Path]] = None
+            elif vark_config is None:
+                required = False
+                cfg_dir = None
+            else:
+                # A path → treat as explicit opt-in (require).
+                required = True
+                cfg_dir = vark_config
+            server = find_vark_credentials_for(
+                self.base_url, config_dir=cfg_dir, required=required,
+            )
+            if server is not None:
+                self.auth = (server.user, server.password)
+                # Only demote verify when the caller didn't ask for a
+                # specific TLS posture. `verify is True` is the default;
+                # any other value (False, a CA path) is the caller's
+                # deliberate choice and we leave it alone.
+                if verify is True and server.insecure:
+                    self.verify = False
 
     # ── HTTP primitives ──────────────────────────────────────────────────
 
@@ -862,6 +932,52 @@ class AnthiveClient:
         """Return every gene name in a database (uses a single big
         ``search_genes`` call)."""
         return self.search_genes(db_id, q="", limit=100000)
+
+    @classmethod
+    def from_vark_server(
+        cls,
+        name: str,
+        *,
+        config_dir: Optional[Union[str, Path]] = None,
+        **kwargs: Any,
+    ) -> 'AnthiveClient':
+        """Construct a client wired to a registered Go vark CLI server.
+
+        Looks up the server by ``name`` in ``~/.config/vark/config.yaml``
+        (or ``config_dir`` if provided), decrypts its password from
+        ``secrets.age``, and returns an ``AnthiveClient`` already
+        authenticated against the right ``base_url`` with ``verify``
+        following the server's ``insecure`` flag.
+
+        Args:
+            name: The ``name:`` field of the entry in ``config.yaml``.
+            config_dir: Override ``~/.config/vark/``.
+            **kwargs: Extra constructor kwargs passed through to
+                :class:`AnthiveClient`. ``auth`` / ``verify`` / ``base_url``
+                given here override the values discovered from the vark
+                registry.
+
+        Raises:
+            VarkConfigError: when the ``vark-config`` extras are missing,
+                no server is named ``name``, or the server has no stored
+                password.
+
+        Example::
+
+            client = AnthiveClient.from_vark_server('intern')
+            print(client.get_version()['version'])
+        """
+        server = find_vark_server_by_name(name, config_dir=config_dir)
+        defaults: Dict[str, Any] = {
+            'base_url': server.url,
+            'auth': (server.user, server.password),
+            'verify': not server.insecure,
+        }
+        defaults.update(kwargs)
+        # vark_config has already done its job — don't re-trigger discovery
+        # from the constructor for a client we've already authenticated.
+        defaults.setdefault('vark_config', False)
+        return cls(**defaults)
 
     @classmethod
     def pick_fastest(cls,

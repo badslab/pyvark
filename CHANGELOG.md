@@ -3,6 +3,41 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.2.0 — 2026-06-22
+
+### Added
+
+- **Reuse Go vark CLI credentials.** When `AnthiveClient(base_url)` is
+  called without `auth=`, the client now looks up `~/.config/vark/`
+  (the Go [`vark`](https://codeberg.org/mfiers/vark) CLI's local
+  config + age-encrypted secrets store) and auto-wires the matching
+  server's basic-auth credentials. The new constructor kwarg
+  `vark_config=` controls this:
+  - `None` (default) — auto, silent fallback.
+  - `True` — required (raise `VarkConfigError` on miss).
+  - `False` — skip entirely.
+  - `str | Path` — use a custom config dir.
+- **`AnthiveClient.from_vark_server('name')`** classmethod — build a
+  client from a named entry in the Go CLI's `config.yaml`.
+- **`vark.VarkConfigError`** — new exception type, raised when
+  discovery is required but cannot succeed.
+- **`insecure: true` propagates** as `verify=False` (unless the caller
+  passed `verify=` explicitly).
+
+### Packaging
+
+- New optional-dependencies group **`vark-config`** —
+  `pip install pyvark[vark-config]` adds `pyrage` (age decryption) +
+  `PyYAML` (config.yaml). The base install is unchanged; auto-discovery
+  silently no-ops when the extras aren't installed.
+
+### Notes
+
+- Pyodide / JupyterLite skip credential discovery automatically
+  (there's no `~/.config/vark/` in the browser).
+- Explicit `auth=` always wins — vark-config discovery never overrides
+  a caller-supplied auth.
+
 ## 0.1.0 — 2026-06-22
 
 Initial release. Clean break from the legacy `antclient` 1.x history

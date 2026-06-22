@@ -83,6 +83,41 @@ open("umap.png", "wb").write(plot["bytes"])
 print(plot["caption"])
 ```
 
+## Reusing vark CLI credentials
+
+If you already use the [Go `vark` CLI](https://codeberg.org/mfiers/vark)
+you don't need to re-enter passwords here. With the `vark-config` extras
+installed, `AnthiveClient` reads `~/.config/vark/config.yaml` and
+decrypts `~/.config/vark/secrets.age` (age / X25519) on construction:
+
+```sh
+pip install "pyvark[vark-config]"   # adds pyrage + PyYAML
+```
+
+```python
+from vark import AnthiveClient
+
+# Auto-discover: matches the URL against the Go CLI's server registry.
+client = AnthiveClient("https://my.anthive/api")
+# → uses (user, password) from the matching entry, and demotes
+#   `verify` to False when the entry has `insecure: true`.
+
+# Or look up by registered server name:
+client = AnthiveClient.from_vark_server("intern")
+```
+
+Constructor knob — `vark_config=`:
+
+- `None` (default): auto; silently no-op when the config dir / extras
+  are missing.
+- `True`: require — raise `VarkConfigError` if no entry matches.
+- `False`: skip discovery entirely.
+- `str | Path`: use that directory instead of `~/.config/vark/`.
+
+Passing `auth=` explicitly always wins; vark-config discovery never
+overrides it. Pyodide / JupyterLite skip discovery automatically
+(there's no filesystem to read).
+
 ## API coverage (highlights)
 
 * `get_root`, `get_health`, `get_metrics`, `get_version`,

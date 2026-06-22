@@ -23,9 +23,10 @@ use ``from vark.helpers import find_database, find_metadata``.
 """
 
 from .client import AnthiveClient
+from ._credentials import VarkConfigError
 
 # Backward-compatibility alias (matches antclient 1.x).
 AntClient = AnthiveClient
 
-__version__ = "0.1.0"
-__all__ = ["AnthiveClient", "AntClient", "__version__"]
+__version__ = "0.2.0"
+__all__ = ["AnthiveClient", "AntClient", "VarkConfigError", "__version__"]
