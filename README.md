@@ -6,7 +6,7 @@ Python client for the [Anthive](https://codeberg.org/mfiers/anthive4)
 single-cell RNA-seq REST API. Sibling of the Go [`vark`](https://codeberg.org/mfiers/vark)
 CLI — same backend, two front ends.
 
-API surface verified against **anthive REST API 2.7.2** (2026-06-20).
+API surface verified against **anthive REST API 2.30.0** (2026-07-02).
 
 ## Why the dual name?
 
@@ -196,8 +196,98 @@ discovery automatically (no filesystem in the browser).
 * `module_score`, `list_module_scores` — on-the-fly and pre-computed
   module scores.
 * `list_genesets`, `get_geneset`, `rescan_genesets`.
+* `list_catalogs`, `get_catalog`, `get_catalog_module`,
+  `get_catalog_score`, `rescan_catalogs` — unified module-catalog
+  view over starCAT (weighted programs, one-segment id like
+  `MICROGLIA_V1_0`) + genesets (plain gene lists, two-segment id
+  like `Sierksma2025/WGCNA`). Score recipes let you reproduce
+  binary `*_pos` calls client-side (API 2.30+).
 * `pick_fastest(base_urls, ...)` — server-selection helper that
   consumes `/health` latency telemetry.
+
+## Module catalogs (starCAT + genesets)
+
+Anthive REST API 2.30 unifies starCAT programs and genesets behind a
+single `/catalogs` view. Both sources answer to the same route
+templates, so a client can walk every module catalog without
+branching by kind:
+
+```python
+from vark import AnthiveClient
+client = AnthiveClient("https://my.anthive.example/api")
+
+# 1. Discover every catalog (or filter by source).
+inventory = client.list_catalogs(source="starcat")
+for cat in inventory["catalogs"]:
+    print(cat["source"], cat["catalog_id"], cat.get("n_modules"))
+
+# 2. Drill into one catalog — module + score summaries.
+#    catalog_id is one segment for starcat, two for geneset.
+starcat = client.get_catalog("starcat", "MICROGLIA_V1_0")
+print(len(starcat["modules"]), "modules")
+print(len(starcat["scores"]),  "derived scores")
+
+geneset = client.get_catalog("geneset", "Sierksma2025/WGCNA")
+
+# 3. Fetch one module's gene weights (starcat) or list (geneset).
+mod = client.get_catalog_module(
+    "starcat", "MICROGLIA_V1_0", "Microglia_Border_CAM", top=20,
+)
+for row in mod["top_genes"]:
+    print(f"{row['rank']:2}  {row['gene']:10}  {row['weight']:+.4f}")
+
+# 4. Fetch a derived-score recipe — enough to reproduce it
+#    client-side. Binary `*_pos` calls are just
+#    `usage[column] > threshold` on normalised usage.
+recipe = client.get_catalog_score(
+    "starcat", "MICROGLIA_V1_0", "Border_CAM_pos",
+)
+# {"name": "Border_CAM_pos", "kind": "discrete",
+#  "columns": ["Microglia_Border_CAM"], "threshold": 0.0448, ...}
+```
+
+`client.rescan_catalogs()` forces a server-side reload after you
+drop a new starCAT TSV or geneset YAML onto the store.
+
+## Recipe — module-score vs gene on the XY plot (API 2.29+)
+
+REST API 2.29 lifted the restriction that made `attach_sessions`
+columns unusable as `x` / `y` on the XY plot endpoints (they
+worked as `color=` already). That unlocks the "score-vs-gene"
+figure — compute a module score on the fly, then plot it against a
+single gene's expression:
+
+```python
+from vark import AnthiveClient
+client = AnthiveClient("https://my.anthive.example/api")
+db_id = "Sierksma2025/microglia"
+
+# Compute a Seurat-style module score for a small gene list and
+# capture the session id the server hands back.
+score = client.module_score(
+    db_id,
+    genes=["APOE", "TREM2", "CD9", "SPP1"],
+    name="DAM_score",
+)
+session_col = score["column"]   # e.g. "session_1::DAM_score"
+
+# Now use the score as X on an XY scatter, gene expression as Y.
+# Pre-2.29 servers reject this with 400; 2.29+ returns a plot.
+plot = client.get_plot(
+    db_id, "scatter",
+    x=session_col, y="SPP1",
+    color="cell_type",
+    marginals="hist", regline=True,
+    width=6, height=5, dpi=150,
+)
+open("dam_vs_spp1.png", "wb").write(plot["bytes"])
+print(plot["caption"])
+```
+
+`session_col` is dataset-scoped and lives only inside this client's
+plot-request context — the server re-materialises it from the
+Parquet sidecar keyed on `session_id`. Nothing is written back to
+the duckdb.
 
 ## Tests
 

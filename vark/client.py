@@ -4,7 +4,7 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.7.2** (2026-06-20). Older
+API surface verified against **REST API 2.30.0** (2026-07-02). Older
 servers still work for every endpoint they expose; new params degrade
 to "server ignores it" rather than client-side errors.
 
@@ -174,7 +174,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.7.2"
+    API_TARGET = "2.30.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.
@@ -890,6 +890,128 @@ class AnthiveClient:
     def rescan_genesets(self) -> Dict:
         """``POST /genesets/rescan`` — re-scan geneset store + rebuild."""
         return self._post('/genesets/rescan')
+
+    # ── Catalogs (REST API 2.30+) ───────────────────────────────────────
+    #
+    # Unified view over every module catalog in the anthive stack —
+    # currently ``source='geneset'`` (Sierksma/WGCNA-style, plain gene
+    # lists) and ``source='starcat'`` (weighted starCAT programs). The
+    # geneset side is a re-shaping of the older ``/genesets`` tree; the
+    # starcat side had no REST surface before 2.30.
+    #
+    # ``catalog_id`` shape:
+    #   - starcat  → one segment  (e.g. ``"MICROGLIA_V1_0"``)
+    #   - geneset  → two segments (e.g. ``"Sierksma2025/WGCNA"``)
+    # Both work on the same route templates (the server matches both
+    # arities via a helper).
+
+    @_cache_long(ttl=3600)
+    def list_catalogs(_self,
+                      source: Optional[str] = None) -> Dict:
+        """``GET /catalogs[?source=geneset|starcat]`` — every module
+        catalog on the server.
+
+        Returns the discovery envelope::
+
+            {"count": N,
+             "catalogs": [{"source": "starcat", "catalog_id": "...",
+                           "n_modules": ..., "n_scores": ...,
+                           "n_genes": ...}, ...]}
+
+        Args:
+            source: Optional filter — ``'geneset'`` or ``'starcat'``.
+                When ``None``, both sources are returned.
+        """
+        params = {'source': source} if source else None
+        return _self._get('/catalogs', params=params)
+
+    @_cache_long(ttl=3600)
+    def get_catalog(_self, source: str, catalog_id: str) -> Dict:
+        """``GET /catalogs/{source}/{catalog_id}`` — one catalog with
+        its module summaries + score recipes + metadata.
+
+        ``catalog_id`` is a path-style key: ``'MICROGLIA_V1_0'`` for
+        starcat (one segment), ``'Sierksma2025/WGCNA'`` for geneset
+        (two segments) — both route to the same handler server-side.
+
+        The response carries::
+
+            {..., "modules": [{"name", "n_genes", "group", ...}, ...],
+                  "scores":  [{"name", "kind", ...}, ...]}
+        """
+        return _self._get(f'/catalogs/{source}/{catalog_id}')
+
+    @_cache_long(ttl=3600)
+    def get_catalog_module(_self,
+                           source: str,
+                           catalog_id: str,
+                           module_name: str,
+                           top: Optional[int] = None) -> Dict:
+        """``GET /catalogs/{source}/{catalog_id}/modules/{name}`` —
+        one module's gene list ± weights.
+
+        For starcat modules the response includes ``weights`` (a
+        ``{gene: weight}`` dict, only when the requested slice covers
+        the full module) and ``top_genes`` (list of
+        ``{gene, weight, rank}`` ordered by ``abs(weight)``).
+
+        For geneset modules the weights are ``None`` and ``top_genes``
+        is the plain gene list.
+
+        Args:
+            source: ``'geneset'`` or ``'starcat'``.
+            catalog_id: Path-style catalog key (see :meth:`get_catalog`).
+            module_name: The module / program name inside the catalog.
+            top: If set, return only the top-N genes (by ``|weight|``
+                for starcat, first-N for geneset). Server clamps to
+                ``1..5000``.
+        """
+        params = {'top': top} if top is not None else None
+        return _self._get(
+            f'/catalogs/{source}/{catalog_id}/modules/{module_name}',
+            params=params,
+        )
+
+    @_cache_long(ttl=3600)
+    def get_catalog_score(_self,
+                          source: str,
+                          catalog_id: str,
+                          score_name: str) -> Dict:
+        """``GET /catalogs/{source}/{catalog_id}/scores/{name}`` —
+        one derived-score recipe.
+
+        Returns the recipe dict (shape depends on the score ``kind``):
+
+        - **composite** — linear combination of usage columns::
+
+              {"name": "...", "kind": "composite",
+               "columns": [...], "coefficients": [...],
+               "normalization": "normalized"}
+
+        - **discrete** — binary threshold (e.g. ``Border_CAM_pos``)::
+
+              {"name": "Border_CAM_pos", "kind": "discrete",
+               "columns": ["Microglia_Border_CAM"],
+               "threshold": 0.0448,
+               "normalization": "normalized"}
+
+        - **multinomial** — argmax over a set of columns.
+
+        Lets callers reproduce the score client-side, or explain what
+        a binary ``*_pos`` sidecar column actually means.
+        """
+        return _self._get(
+            f'/catalogs/{source}/{catalog_id}/scores/{score_name}',
+        )
+
+    def rescan_catalogs(self) -> Dict:
+        """``POST /catalogs/rescan`` — invalidate the starcat + geneset
+        catalog cache and reload from disk.
+
+        Returns ``{"count": N, "catalogs": [...]}`` — the same shape
+        as :meth:`list_catalogs` for the freshly reloaded registry.
+        """
+        return self._post('/catalogs/rescan')
 
     # ── Plot cache admin ────────────────────────────────────────────────
 

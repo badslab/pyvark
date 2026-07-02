@@ -311,3 +311,191 @@ def test_antclient_alias():
     """Back-compat alias from the antclient era."""
     from vark import AntClient
     assert AntClient is AnthiveClient
+
+
+# ── /catalogs family (REST API 2.30+) ─────────────────────────────────────
+
+
+def test_catalog_methods_exist():
+    """Full 2.30 catalog surface is bound on the client."""
+    expected = {
+        'list_catalogs',
+        'get_catalog',
+        'get_catalog_module',
+        'get_catalog_score',
+        'rescan_catalogs',
+    }
+    missing = expected - set(dir(AnthiveClient))
+    assert not missing, f"missing catalog methods: {missing}"
+
+
+def test_api_target_at_least_2_30():
+    """The API_TARGET docstring should reflect the 2.30 update."""
+    parts = [int(p) for p in AnthiveClient.API_TARGET.split('.')]
+    assert (parts[0], parts[1]) >= (2, 30), (
+        f"API_TARGET={AnthiveClient.API_TARGET!r} — expected >= 2.30.0"
+    )
+
+
+def test_list_catalogs_no_source(monkeypatch):
+    """``list_catalogs()`` hits ``/catalogs`` with no query params."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return {"count": 3, "catalogs": [
+            {"source": "starcat", "catalog_id": "MICROGLIA_V1_0"},
+            {"source": "geneset", "catalog_id": "Sierksma2025/WGCNA"},
+            {"source": "geneset", "catalog_id": "Rangaraju2018/WGCNA"},
+        ]}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    result = c.list_catalogs()
+    assert captured['path'] == '/catalogs'
+    assert captured['params'] is None
+    assert result['count'] == 3
+
+
+def test_list_catalogs_with_source_filter(monkeypatch):
+    """``list_catalogs(source='starcat')`` forwards the source
+    query param."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return {"count": 1, "catalogs": [
+            {"source": "starcat", "catalog_id": "MICROGLIA_V1_0"},
+        ]}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.list_catalogs(source='starcat')
+    assert captured['params'] == {'source': 'starcat'}
+
+
+def test_get_catalog_starcat_one_segment_id(monkeypatch):
+    """starcat catalog_id is a single segment (``MICROGLIA_V1_0``)."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        return {"source": "starcat", "catalog_id": "MICROGLIA_V1_0",
+                "modules": [], "scores": []}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.get_catalog('starcat', 'MICROGLIA_V1_0')
+    assert captured['path'] == '/catalogs/starcat/MICROGLIA_V1_0'
+
+
+def test_get_catalog_geneset_two_segment_id(monkeypatch):
+    """geneset catalog_id is two segments (``Sierksma2025/WGCNA``);
+    the '/' is passed through unchanged so FastAPI's `{catalog_id:path}`
+    match handles it."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        return {"source": "geneset", "catalog_id": "Sierksma2025/WGCNA",
+                "modules": [], "scores": []}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.get_catalog('geneset', 'Sierksma2025/WGCNA')
+    assert captured['path'] == '/catalogs/geneset/Sierksma2025/WGCNA'
+
+
+def test_get_catalog_module_top_kwarg(monkeypatch):
+    """``top=N`` becomes a ``top`` query param; omitted when None."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return {
+            "name": "Microglia_Border_CAM",
+            "top_genes": [
+                {"gene": "CD163", "weight": 0.42, "rank": 1},
+                {"gene": "LYVE1", "weight": 0.31, "rank": 2},
+            ],
+        }
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+
+    # No top: no params
+    c.get_catalog_module('starcat', 'MICROGLIA_V1_0',
+                         'Microglia_Border_CAM')
+    assert captured['path'] == (
+        '/catalogs/starcat/MICROGLIA_V1_0/modules/Microglia_Border_CAM'
+    )
+    assert captured['params'] is None
+
+    # With top: forwarded verbatim
+    c.get_catalog_module('starcat', 'MICROGLIA_V1_0',
+                         'Microglia_Border_CAM', top=10)
+    assert captured['params'] == {'top': 10}
+
+
+def test_get_catalog_module_two_segment_catalog_id(monkeypatch):
+    """Two-segment catalog IDs still route to /modules/{name} — the
+    FastAPI helper handler picks them up server-side."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        return {"name": "Brown_Lysosome", "top_genes": []}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.get_catalog_module('geneset', 'Sierksma2025/WGCNA', 'Brown_Lysosome')
+    assert captured['path'] == (
+        '/catalogs/geneset/Sierksma2025/WGCNA/modules/Brown_Lysosome'
+    )
+
+
+def test_get_catalog_score_returns_recipe(monkeypatch):
+    """``get_catalog_score`` returns the recipe dict verbatim — the
+    client is a passthrough, no reshaping."""
+    recipe = {
+        "name": "Border_CAM_pos",
+        "kind": "discrete",
+        "columns": ["Microglia_Border_CAM"],
+        "threshold": 0.0448,
+        "normalization": "normalized",
+    }
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        return recipe
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    result = c.get_catalog_score('starcat', 'MICROGLIA_V1_0',
+                                 'Border_CAM_pos')
+    assert captured['path'] == (
+        '/catalogs/starcat/MICROGLIA_V1_0/scores/Border_CAM_pos'
+    )
+    assert result == recipe
+    assert result['threshold'] == 0.0448
+
+
+def test_rescan_catalogs_posts(monkeypatch):
+    """``rescan_catalogs()`` POSTs (not GETs) to /catalogs/rescan."""
+    called = {}
+
+    def fake_post(path, json=None):
+        called['path'] = path
+        called['json'] = json
+        return {"count": 4, "catalogs": []}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_post', fake_post)
+    result = c.rescan_catalogs()
+    assert called['path'] == '/catalogs/rescan'
+    assert called['json'] is None
+    assert result['count'] == 4

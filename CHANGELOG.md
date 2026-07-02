@@ -5,6 +5,49 @@ recorded in `vark.AnthiveClient.API_TARGET`.
 
 ## Unreleased
 
+### Added — REST API 2.30 catalog family
+
+- **`AnthiveClient.list_catalogs(source=None)`** — `GET /catalogs`.
+  Cross-source discovery of every module catalog on the server
+  (`source='geneset'` and `source='starcat'`). Optional filter by
+  source.
+- **`AnthiveClient.get_catalog(source, catalog_id)`** —
+  `GET /catalogs/{source}/{catalog_id}`. One catalog + its module
+  summaries + score recipes + metadata. `catalog_id` is path-style —
+  `"MICROGLIA_V1_0"` for starcat (one segment) or
+  `"Sierksma2025/WGCNA"` for geneset (two segments); both work on the
+  same route.
+- **`AnthiveClient.get_catalog_module(source, catalog_id, module_name,
+  top=None)`** — `GET /catalogs/{source}/{catalog_id}/modules/{name}`.
+  One module's gene list ± weights. starcat modules carry a
+  `{gene: weight}` dict + ranked `top_genes`; genesets carry a plain
+  gene list. `top=N` clamps to top-N by `|weight|` (starcat) or
+  first-N (geneset).
+- **`AnthiveClient.get_catalog_score(source, catalog_id, score_name)`**
+  — `GET /catalogs/{source}/{catalog_id}/scores/{name}`. Returns the
+  derived-score recipe (composite / discrete-threshold /
+  multinomial) — enough to reproduce the score client-side and to
+  explain what a binary `*_pos` sidecar column actually thresholds.
+- **`AnthiveClient.rescan_catalogs()`** — `POST /catalogs/rescan`.
+  Invalidate the server-side catalog cache; returns the freshly
+  reloaded registry.
+
+### Notes — REST API 2.29 (no client change required)
+
+- `attach_sessions` columns are now usable as `x` / `y` on the XY
+  plot endpoints (previously the server 400'd). Existing `get_plot`
+  calls that were rejected — session-vs-gene, session-vs-obsnum,
+  session-vs-session — start returning 200 with no client-side
+  change. See the new `README.md` recipe for a "module score vs
+  gene" figure built on top of this.
+
+### Changed
+
+- **`AnthiveClient.API_TARGET`** bumped from `"2.7.2"` to `"2.30.0"`
+  — the version this release was last verified against. This is a
+  documentation string, not a runtime gate, so older servers keep
+  working (endpoints they don't expose just 404).
+
 ### Docs
 
 - Expanded the **"Reusing vark CLI credentials"** README section into a
@@ -16,6 +59,11 @@ recorded in `vark.AnthiveClient.API_TARGET`.
   `[vark-config]` extras). The section is the anchor target of
   auto-generated anthive notebooks
   (`https://codeberg.org/mfiers/pyvark#reusing-vark-cli-credentials`).
+- New README section **"Module catalogs (starcat + genesets)"** with
+  a walkthrough of the 2.30 catalog family (list → catalog →
+  module → score recipe) plus a **"Score vs gene"** recipe that
+  exercises the 2.29 XY plot fix (`module_score(...)` →
+  `session_id` → `get_plot(..., x=<session>, y='SPP1')`).
 
 ## 0.2.0 — 2026-06-22
 
