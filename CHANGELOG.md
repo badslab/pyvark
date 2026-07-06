@@ -3,7 +3,7 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
-## Unreleased
+## 0.3.0 — 2026-07-06
 
 ### Added — REST API 2.30 catalog family
 
