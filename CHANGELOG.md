@@ -3,6 +3,33 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.4.0 — 2026-08-08
+
+### Added — REST API 2.34 / 2.35 / 2.36 `bin_color`
+
+- **`AnthiveClient.get_plot(..., bin_color=N, bin_color_method='quantile')`**
+  — bin a continuous `color` field (numerical obs or gene) into
+  ``N`` categorical groups server-side before plotting.
+  `bin_color` is an int in ``2..20``; `bin_color_method` is
+  ``'quantile'`` (default, equal-count) or ``'width'`` (equal-width).
+  Wired on **scatter, hexbin** (2.34), **rolling** (2.34),
+  **kde2d** (2.35), **histogram, ecdf, kde** (2.36) — seven geoms.
+  On scatter/hexbin the param is optional; on rolling/kde2d/
+  histogram/ecdf/kde a continuous `color` **requires** `bin_color`
+  (server returns 400 otherwise).
+
+### Fixed
+
+- **`PLOT_GEOMS` gains `de_quadrant`** (REST API 2.12) — previously
+  missing, so `get_plot(..., 'de_quadrant', …)` raised a client-side
+  ``ValueError`` before the request ever left the machine. Also add
+  it to the offline PLOT_GEOMS test.
+
+### Changed
+
+- **`AnthiveClient.API_TARGET`** bumped from ``"2.30.0"`` to
+  ``"2.36.0"`` — the version this release was last verified against.
+
 ## 0.3.0 — 2026-07-06
 
 ### Added — REST API 2.30 catalog family

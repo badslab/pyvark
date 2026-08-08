@@ -4,7 +4,7 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.30.0** (2026-07-02). Older
+API surface verified against **REST API 2.36.0** (2026-08-07). Older
 servers still work for every endpoint they expose; new params degrade
 to "server ignores it" rather than client-side errors.
 
@@ -31,7 +31,7 @@ from ._credentials import (
 )
 
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -174,7 +174,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.30.0"
+    API_TARGET = "2.36.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.
@@ -187,6 +187,8 @@ class AnthiveClient:
         'volcano', 'ma', 'forest',
         # DE-heatmap (REST API 2.7+)
         'de_heatmap',
+        # DE-quadrant (REST API 2.12+)
+        'de_quadrant',
     })
 
     #: Supported output formats. ``csv`` / ``tsv`` were added in 2.6.0 and
@@ -561,6 +563,8 @@ class AnthiveClient:
                  palette_continuous: Optional[str] = None,
                  palette_divergent: Optional[str] = None,
                  color_scale: Optional[str] = None,
+                 bin_color: Optional[int] = None,
+                 bin_color_method: Optional[str] = None,
                  font_family: Optional[str] = None,
                  font_size: Optional[float] = None,
                  **extra: Any) -> Dict[str, Any]:
@@ -587,6 +591,18 @@ class AnthiveClient:
             color_scale: ``'auto'`` (default) | ``'sequential'`` |
                      ``'divergent'`` — overrides the heuristic for
                      continuous colour.
+            bin_color: If set (2..20), bin a continuous ``color`` field
+                     (numerical obs or gene) into N categorical bins
+                     server-side before plotting (REST API 2.34+ for
+                     scatter/hexbin, 2.34 rolling, 2.35 kde2d, 2.36
+                     histogram/ecdf/kde). On scatter / hexbin this is
+                     optional; on rolling / kde2d / histogram / ecdf /
+                     kde a continuous ``color`` REQUIRES ``bin_color``
+                     (server returns 400 otherwise).
+            bin_color_method: ``'quantile'`` (default — equal-count
+                     bins, `pd.qcut`) or ``'width'`` (equal-width bins,
+                     `pd.cut`). Only meaningful when ``bin_color`` is
+                     set.
             font_family, font_size: figure typography.
             **extra: Geom-specific params, forwarded verbatim:
 
@@ -682,6 +698,10 @@ class AnthiveClient:
             params['palette_divergent'] = palette_divergent
         if color_scale is not None:
             params['color_scale'] = color_scale
+        if bin_color is not None:
+            params['bin_color'] = bin_color
+        if bin_color_method is not None:
+            params['bin_color_method'] = bin_color_method
         if font_family is not None:
             params['font_family'] = font_family
         if font_size is not None:

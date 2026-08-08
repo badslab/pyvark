@@ -28,5 +28,5 @@ from ._credentials import VarkConfigError
 # Backward-compatibility alias (matches antclient 1.x).
 AntClient = AnthiveClient
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["AnthiveClient", "AntClient", "VarkConfigError", "__version__"]

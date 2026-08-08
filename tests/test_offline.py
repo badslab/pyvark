@@ -39,7 +39,7 @@ def test_api_target_set():
 
 
 def test_plot_geoms_set():
-    """PLOT_GEOMS includes every geom the server ships at API 2.7.2."""
+    """PLOT_GEOMS includes every geom the server ships at API 2.36.0."""
     assert isinstance(AnthiveClient.PLOT_GEOMS, frozenset)
     expected = {
         'scatter', 'hexbin', 'kde2d',
@@ -48,6 +48,8 @@ def test_plot_geoms_set():
         'heatmap', 'rolling',
         'volcano', 'ma', 'forest',
         'de_heatmap',
+        # REST API 2.12+
+        'de_quadrant',
     }
     missing = expected - AnthiveClient.PLOT_GEOMS
     assert not missing, f"PLOT_GEOMS is missing: {missing}"
@@ -335,6 +337,89 @@ def test_api_target_at_least_2_30():
     assert (parts[0], parts[1]) >= (2, 30), (
         f"API_TARGET={AnthiveClient.API_TARGET!r} — expected >= 2.30.0"
     )
+
+
+def test_api_target_at_least_2_36():
+    """API_TARGET should reflect the 2.36 bin_color update."""
+    parts = [int(p) for p in AnthiveClient.API_TARGET.split('.')]
+    assert (parts[0], parts[1]) >= (2, 36), (
+        f"API_TARGET={AnthiveClient.API_TARGET!r} — expected >= 2.36.0"
+    )
+
+
+def test_get_plot_forwards_bin_color(monkeypatch):
+    """bin_color + bin_color_method ride through as query params
+    (REST API 2.34+ scatter/hexbin, 2.35 kde2d, 2.36 histogram/ecdf/kde)."""
+    captured = {}
+
+    class FakeResponse:
+        content = b''
+        headers = {'X-Plot-Format': 'png', 'Content-Type': 'image/png'}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get_raw',
+                        lambda path, params=None: (
+                            captured.update({'path': path, 'params': params})
+                            or FakeResponse()))
+
+    # scatter — bin_color optional, method omitted → server default
+    c.get_plot('grp/file', 'scatter', color='Age', bin_color=3)
+    assert captured['params'].get('bin_color') == 3
+    assert 'bin_color_method' not in captured['params']
+
+    # kde2d — bin_color required when color is continuous
+    c.get_plot('grp/file', 'kde2d',
+               x='avg_Braak', y='med_Braak',
+               color='avg_Braak_SEAAD',
+               bin_color=3, bin_color_method='width')
+    assert captured['params'].get('bin_color') == 3
+    assert captured['params'].get('bin_color_method') == 'width'
+
+    # rolling — passthrough
+    c.get_plot('grp/file', 'rolling',
+               x='avg_Braak', y='med_Braak',
+               color='avg_Braak_SEAAD',
+               bin_color=3, window=30)
+    assert captured['params'].get('bin_color') == 3
+    assert captured['params'].get('window') == 30
+
+
+def test_get_plot_bin_color_default_omits_param(monkeypatch):
+    """When bin_color/bin_color_method are None the client MUST NOT
+    send them — otherwise older servers 400 on unknown params."""
+    captured = {}
+
+    class FakeResponse:
+        content = b''
+        headers = {'X-Plot-Format': 'png', 'Content-Type': 'image/png'}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get_raw',
+                        lambda path, params=None: (
+                            captured.update({'params': params})
+                            or FakeResponse()))
+    c.get_plot('grp/file', 'scatter', color='cell_type')
+    assert 'bin_color' not in captured['params']
+    assert 'bin_color_method' not in captured['params']
+
+
+def test_get_plot_de_quadrant_geom(monkeypatch):
+    """de_quadrant (REST API 2.12+) is a valid geom; the client should
+    not reject it on local validation."""
+    captured = {}
+
+    class FakeResponse:
+        content = b''
+        headers = {'X-Plot-Format': 'png', 'Content-Type': 'image/png'}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get_raw',
+                        lambda path, params=None: (
+                            captured.update({'path': path})
+                            or FakeResponse()))
+    c.get_plot('grp/file', 'de_quadrant',
+               study='S', term='T', contrast='C')
+    assert captured['path'] == '/databases/grp/file/plot/de_quadrant'
 
 
 def test_list_catalogs_no_source(monkeypatch):

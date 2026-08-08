@@ -6,7 +6,7 @@ Python client for the [Anthive](https://codeberg.org/mfiers/anthive4)
 single-cell RNA-seq REST API. Sibling of the Go [`vark`](https://codeberg.org/mfiers/vark)
 CLI — same backend, two front ends.
 
-API surface verified against **anthive REST API 2.30.0** (2026-07-02).
+API surface verified against **anthive REST API 2.36.0** (2026-08-07).
 
 ## Why the dual name?
 
@@ -179,7 +179,8 @@ discovery automatically (no filesystem in the browser).
   catalog + per-collection landing-page data (API 2.5+).
 * `get_plot(db_id, geom, ...)` — every server-side geom: `scatter`,
   `hexbin`, `kde2d`, `violin`, `box`, `bar`, `histogram`, `ecdf`,
-  `kde`, `heatmap`, `rolling`, `volcano`, `ma`, `forest`, `de_heatmap`.
+  `kde`, `heatmap`, `rolling`, `volcano`, `ma`, `forest`, `de_heatmap`,
+  `de_quadrant`.
   Captures the `X-Plot-Caption` response header (the multi-sentence
   figure legend — API 2.7.2+). Supports `color_scale=auto|sequential|
   divergent`, plot clamps (`log2fc_clip`, `neglog10p_clip`,
@@ -187,7 +188,11 @@ discovery automatically (no filesystem in the browser).
   (`vmin_quantile` / `vmax_quantile`), per-axis transforms
   (`transform_x` / `transform_y`, `asinh_scale`), KDE knobs
   (`kde_n`, `kde_bw`, `n_levels`, `iso_overlay`, `point_overlay`),
-  marginals / regline overlays. Data export via `format="csv"` /
+  marginals / regline overlays, and on-the-fly binning of a
+  continuous `color` field via `bin_color=N` (2..20) +
+  `bin_color_method='quantile'|'width'` — wired on scatter, hexbin,
+  rolling (API 2.34+), kde2d (2.35+), histogram / ecdf / kde (2.36+).
+  Data export via `format="csv"` /
   `"tsv"` returns the dataframe the plot was built from (API 2.6+).
 * `list_de_studies`, `get_de_study`, `list_de_contrasts`,
   `get_de_rows`, `get_de_by_gene` — DE data flow (API 2.3+).
