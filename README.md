@@ -25,20 +25,26 @@ import.)
 
 ## Install
 
-From Codeberg (no PyPI publish yet):
+From PyPI:
 
 ```sh
-pip install git+ssh://git@codeberg.org/mfiers/pyvark.git
+pip install pyvark          # or: uv add pyvark
 ```
 
-Editable from a local checkout:
+Version pin (semver-safe):
+
+```sh
+pip install "pyvark>=0.4.0,<0.5"
+```
+
+Editable from a local checkout (development):
 
 ```sh
 git clone ssh://git@codeberg.org/mfiers/pyvark.git
 cd pyvark
-pip install -e .
+uv pip install -e .
 # with pandas for `format='dataframe'` support:
-pip install -e ".[pandas]"
+uv pip install -e ".[pandas]"
 ```
 
 Pyodide / JupyterLite:
