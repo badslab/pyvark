@@ -3,6 +3,27 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.5.0 — 2026-08-26
+
+### Added — REST API 2.37 `is_secondary`
+
+- **`is_secondary` field** on ``/databases`` list rows and on
+  ``/databases/{id}/info`` responses. A value of ``True`` means the
+  dataset re-aggregates cells that are already counted in another
+  study and should be excluded from meta-analyses. ``False`` marks a
+  fully primary study. Older servers that omit the field are handled
+  as "primary".
+- **`AnthiveClient.get_databases(primary_only=False)`** — new kwarg.
+  When ``True`` the client drops rows where ``is_secondary`` is
+  truthy. Filtering runs client-side (the server has no dedicated
+  query param yet), which keeps the call a single request and works
+  against any server that returns the field.
+
+### Changed
+
+- **`AnthiveClient.API_TARGET`** bumped from ``"2.36.0"`` to
+  ``"2.37.0"`` — the version this release was last verified against.
+
 ## 0.4.0 — 2026-08-08
 
 ### Added — REST API 2.34 / 2.35 / 2.36 `bin_color`

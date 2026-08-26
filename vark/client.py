@@ -4,7 +4,7 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.36.0** (2026-08-07). Older
+API surface verified against **REST API 2.37.0** (2026-08-26). Older
 servers still work for every endpoint they expose; new params degrade
 to "server ignores it" rather than client-side errors.
 
@@ -31,7 +31,7 @@ from ._credentials import (
 )
 
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -174,7 +174,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.36.0"
+    API_TARGET = "2.37.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.
@@ -336,12 +336,32 @@ class AnthiveClient:
 
     @_cache_short(ttl=60)
     def get_databases(_self, refresh: bool = False,
-                      format: str = "list") -> Union[List[Dict], Any]:
-        """``GET /databases`` — list every available dataset."""
+                      format: str = "list",
+                      primary_only: bool = False) -> Union[List[Dict], Any]:
+        """``GET /databases`` — list every available dataset.
+
+        Each row carries an ``is_secondary`` boolean (REST API 2.37+). A
+        value of ``True`` means the dataset re-aggregates cells that are
+        already counted in another study and should be excluded from
+        meta-analyses. ``False`` marks a fully primary study. Servers
+        older than 2.37 omit the field, in which case the client treats
+        the row as primary.
+
+        Args:
+            refresh: Force a fresh catalog scan on the server.
+            format: ``'list'`` (default) or ``'dataframe'`` (needs pandas).
+            primary_only: If True, drop rows where ``is_secondary`` is
+                truthy. The filter runs client-side, so it works against
+                servers that already return the field and is a no-op on
+                older servers (nothing to drop).
+        """
         params = {'refresh': 'true'} if refresh else None
         response = _self._get('/databases', params=params)
         databases = (response.get('databases', response)
                      if isinstance(response, dict) else response)
+        if primary_only:
+            databases = [db for db in databases
+                         if not db.get('is_secondary', False)]
         if format == 'dataframe':
             import pandas as pd
             return pd.DataFrame(databases)
@@ -354,6 +374,12 @@ class AnthiveClient:
         The ``collection`` block carries ``group_id``, ``doi``, ``pmid``,
         ``accession``, and ``description`` (markdown body of the nearest
         ``index.md``) on REST API 2.5+.
+
+        The response also carries an ``is_secondary`` boolean (REST API
+        2.37+). ``True`` flags a re-aggregation of cells already counted
+        in another dataset, so meta-analyses can skip it. ``False`` is a
+        fully primary study. Older servers omit the key; treat absence
+        as primary.
         """
         return _self._get(f'/databases/{db_id}/info')
 

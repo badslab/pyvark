@@ -584,3 +584,132 @@ def test_rescan_catalogs_posts(monkeypatch):
     assert called['path'] == '/catalogs/rescan'
     assert called['json'] is None
     assert result['count'] == 4
+
+
+# ── is_secondary flag (REST API 2.37+) ────────────────────────────────────
+
+
+def _fake_databases_list():
+    """Two primary rows and one secondary row, in fixed order."""
+    return [
+        {'id': 'A01/PRI', 'title': 'Primary A', 'is_secondary': False},
+        {'id': 'B02/SEC', 'title': 'Re-aggregated B', 'is_secondary': True},
+        {'id': 'C03/PRI', 'title': 'Primary C', 'is_secondary': False},
+    ]
+
+
+def test_get_databases_surfaces_is_secondary(monkeypatch):
+    """The client passes ``is_secondary`` through unchanged, both truthy
+    and falsy, so downstream code can read it off the dict."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_list()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    dbs = c.get_databases()
+    assert len(dbs) == 3
+    by_id = {db['id']: db for db in dbs}
+    assert by_id['A01/PRI']['is_secondary'] is False
+    assert by_id['B02/SEC']['is_secondary'] is True
+    assert by_id['C03/PRI']['is_secondary'] is False
+
+
+def test_get_database_info_surfaces_is_secondary(monkeypatch):
+    """``get_database_info`` returns the payload verbatim, so both
+    ``is_secondary=True`` and ``is_secondary=False`` come through."""
+    payload_secondary = {'id': 'B02/SEC', 'title': 'Re-agg',
+                         'is_secondary': True}
+    payload_primary = {'id': 'A01/PRI', 'title': 'Primary',
+                       'is_secondary': False}
+
+    holder = {'body': payload_primary}
+
+    def fake_get(path, params=None):
+        return holder['body']
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+
+    info = c.get_database_info('A01/PRI')
+    assert info['is_secondary'] is False
+
+    holder['body'] = payload_secondary
+    info = c.get_database_info('B02/SEC')
+    assert info['is_secondary'] is True
+
+
+def test_get_databases_primary_only_drops_secondary(monkeypatch):
+    """``primary_only=True`` filters out ``is_secondary=True`` rows."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_list()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+
+    all_dbs = c.get_databases()
+    assert len(all_dbs) == 3
+
+    primary = c.get_databases(primary_only=True)
+    assert len(primary) == 2
+    ids = {db['id'] for db in primary}
+    assert ids == {'A01/PRI', 'C03/PRI'}
+    assert all(not db.get('is_secondary', False) for db in primary)
+
+
+def test_get_databases_default_returns_everything(monkeypatch):
+    """Without ``primary_only`` the client returns every row, including
+    ``is_secondary=True`` ones. Default behaviour is unchanged from 0.4."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_list()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+
+    dbs = c.get_databases()
+    assert any(db['is_secondary'] for db in dbs)
+
+
+def test_get_databases_missing_is_secondary_treated_as_primary(monkeypatch):
+    """Older servers omit ``is_secondary`` entirely. Rows without the key
+    deserialize as primary, so ``primary_only=True`` keeps them."""
+    legacy_rows = [
+        {'id': 'A01/OLD', 'title': 'legacy row, no field'},
+        {'id': 'B02/OLD', 'title': 'also legacy'},
+    ]
+
+    def fake_get(path, params=None):
+        return {'databases': legacy_rows}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+
+    dbs = c.get_databases()
+    assert len(dbs) == 2
+    for db in dbs:
+        assert 'is_secondary' not in db
+
+    kept = c.get_databases(primary_only=True)
+    assert len(kept) == 2
+    assert {db['id'] for db in kept} == {'A01/OLD', 'B02/OLD'}
+
+
+def test_get_database_info_missing_field_backcompat(monkeypatch):
+    """The info endpoint on a pre-2.37 server returns no ``is_secondary``.
+    The client does not synthesize one, so ``.get('is_secondary', False)``
+    is the caller idiom."""
+    def fake_get(path, params=None):
+        return {'id': 'A01/OLD', 'title': 'legacy dataset'}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    info = c.get_database_info('A01/OLD')
+    assert 'is_secondary' not in info
+    assert info.get('is_secondary', False) is False
+
+
+def test_api_target_at_least_2_37():
+    """The API_TARGET string should reflect the 2.37 is_secondary update."""
+    parts = [int(p) for p in AnthiveClient.API_TARGET.split('.')]
+    assert (parts[0], parts[1]) >= (2, 37), (
+        f"API_TARGET={AnthiveClient.API_TARGET!r} — expected >= 2.37.0"
+    )
