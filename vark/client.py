@@ -31,7 +31,7 @@ from ._credentials import (
 )
 
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -337,7 +337,9 @@ class AnthiveClient:
     @_cache_short(ttl=60)
     def get_databases(_self, refresh: bool = False,
                       format: str = "list",
-                      primary_only: bool = False) -> Union[List[Dict], Any]:
+                      primary_only: bool = False,
+                      only_facet: Optional[Dict[str, List[str]]] = None,
+                      ) -> Union[List[Dict], Any]:
         """``GET /databases`` — list every available dataset.
 
         Each row carries an ``is_secondary`` boolean (REST API 2.37+). A
@@ -354,6 +356,12 @@ class AnthiveClient:
                 truthy. The filter runs client-side, so it works against
                 servers that already return the field and is a no-op on
                 older servers (nothing to drop).
+            only_facet: Optional ``{facet_name: [allowed_values]}`` filter
+                on the ``collection`` block. A row is kept when its
+                ``collection[facet_name]`` value is in the allowed list.
+                Rows missing the ``collection`` block or the requested
+                key are dropped. Runs client-side, one facet per call.
+                Example: ``only_facet={"ant_disease": ["AD", "control"]}``.
         """
         params = {'refresh': 'true'} if refresh else None
         response = _self._get('/databases', params=params)
@@ -362,6 +370,18 @@ class AnthiveClient:
         if primary_only:
             databases = [db for db in databases
                          if not db.get('is_secondary', False)]
+        if only_facet:
+            def _match(row: Dict) -> bool:
+                collection = row.get('collection')
+                if not isinstance(collection, dict):
+                    return False
+                for facet_name, allowed in only_facet.items():
+                    if facet_name not in collection:
+                        return False
+                    if collection[facet_name] not in allowed:
+                        return False
+                return True
+            databases = [db for db in databases if _match(db)]
         if format == 'dataframe':
             import pandas as pd
             return pd.DataFrame(databases)
@@ -380,6 +400,14 @@ class AnthiveClient:
         in another dataset, so meta-analyses can skip it. ``False`` is a
         fully primary study. Older servers omit the key; treat absence
         as primary.
+
+        The returned dict also exposes a top-level ``description`` field
+        with the dataset's own prose description, distinct from the
+        group-level description on ``collection``. The ``collection``
+        sub-dict may include a ``title`` key that acts as the display
+        override for the group name (fall back to ``group`` when
+        absent), and a ``date`` key with the full publication date as
+        ``YYYY-MM-DD``.
         """
         return _self._get(f'/databases/{db_id}/info')
 
@@ -1058,6 +1086,113 @@ class AnthiveClient:
         as :meth:`list_catalogs` for the freshly reloaded registry.
         """
         return self._post('/catalogs/rescan')
+
+    # ── Facets (fleet-wide ant_* obs columns) ───────────────────────────
+
+    @_cache_short(ttl=60)
+    def list_facets(_self) -> List[Dict]:
+        """``GET /facets`` — fleet-wide inventory of ``ant_*`` obs columns.
+
+        Returns a list of dicts, one per facet, with keys ``facet``,
+        ``type`` (``'categorical'`` or ``'numerical'``), ``type_mixed``
+        (True when the facet is categorical on some datasets and
+        numerical on others), ``n_datasets`` (how many datasets carry
+        this facet), and ``signal_strength`` (max variance-explained
+        recorded in ``module_variability.parquet`` for this facet, or
+        zero when no signal is on record).
+
+        Rows are pre-sorted by ``n_datasets`` descending, then by facet
+        name. The response envelope's ``n_facets`` count is dropped;
+        take ``len(result)`` if you need it.
+
+        Example::
+
+            facets = client.list_facets()
+            for facet in facets[:5]:
+                print(facet['facet'], facet['n_datasets'],
+                      facet['signal_strength'])
+        """
+        response = _self._get('/facets')
+        return (response.get('facets', response)
+                if isinstance(response, dict) else response)
+
+    @_cache_short(ttl=60)
+    def get_facet(_self, facet_name: str,
+                  top_modules: int = 200) -> Dict:
+        """``GET /facets/{facet_name}`` — detail page for one facet.
+
+        Returns a dict describing this facet across every dataset that
+        carries it. Keys: ``facet``, ``type``, ``type_mixed``,
+        ``n_datasets``, ``total_n_cells``, ``datasets`` (per-dataset
+        summaries with ``db_id``, ``title``, ``group``, ``group_id``,
+        ``file_id``, ``n_cells``, ``kind_on_this_dataset``),
+        ``value_distribution`` (categorical: per-value ``n_cells`` +
+        ``n_datasets``; numerical: fleet min/max plus per-dataset
+        min/max/mean), and ``modules`` (top rows from
+        ``module_variability.parquet`` filtered on this facet, wrapped
+        as ``{rows, n_total, truncated}``).
+
+        Raises ``HTTPError`` 400 when ``facet_name`` does not start with
+        ``ant_``, or 404 when no dataset carries it.
+
+        Args:
+            facet_name: Obs column name, must start with ``ant_``.
+            top_modules: Cap on module-variability rows returned (1 to
+                5000, default 200).
+
+        Example::
+
+            detail = client.get_facet('ant_disease')
+            print(detail['n_datasets'], detail['total_n_cells'])
+            for value in detail['value_distribution']['values'][:5]:
+                print(value['value'], value['n_cells'])
+        """
+        params = {'top_modules': top_modules}
+        return _self._get(f'/facets/{facet_name}', params=params)
+
+    @_cache_short(ttl=60)
+    def get_gene_variance_by_facet(_self,
+                                   db_id: str,
+                                   facet: str,
+                                   top: int = 50) -> Dict:
+        """``GET /databases/{db_id}/gene-variance-by-facet`` — rank genes
+        by between-group variance of their mean expression across the
+        groups defined by an ``ant_*`` facet on one dataset.
+
+        Numerical facets are bucketed into five quantile bins (``q1``
+        to ``q5``) server-side via DuckDB ``NTILE``. Categorical facets
+        are grouped verbatim by value.
+
+        Returns a dict with ``db_id``, ``facet``, ``facet_type``,
+        ``layer``, ``n_groups``, ``groups`` (sorted group labels),
+        ``n_cells_per_group`` (label to cell count), ``n_genes_returned``,
+        and ``genes`` (list of ``{gene, signal, group_means}`` sorted by
+        ``signal`` descending). ``signal`` is the sample variance across
+        per-group mean expression. Genes only appear when they have
+        non-zero expression in at least two groups.
+
+        Raises ``HTTPError`` 400 when ``facet`` is not an ``ant_*``
+        column, is all-NULL on the dataset, or resolves to a single
+        group. 404 when the dataset or facet is not present.
+
+        Args:
+            db_id: Composite ``group/file`` dataset identifier.
+            facet: Obs column to group by. Must start with ``ant_``.
+            top: Cap on returned genes, sorted by signal descending
+                (1 to 500, default 50).
+
+        Example::
+
+            top_genes = client.get_gene_variance_by_facet(
+                'Blackburn2026/main', 'ant_disease', top=20,
+            )
+            for gene in top_genes['genes'][:5]:
+                print(gene['gene'], gene['signal'], gene['group_means'])
+        """
+        params = {'facet': facet, 'top': top}
+        return _self._get(
+            f'/databases/{db_id}/gene-variance-by-facet', params=params,
+        )
 
     # ── Plot cache admin ────────────────────────────────────────────────
 

@@ -713,3 +713,238 @@ def test_api_target_at_least_2_37():
     assert (parts[0], parts[1]) >= (2, 37), (
         f"API_TARGET={AnthiveClient.API_TARGET!r} — expected >= 2.37.0"
     )
+
+
+# ── Facets family (0.6.0) ─────────────────────────────────────────────────
+
+
+def test_facet_methods_exist():
+    """0.6.0 exposes the facets surface on the client."""
+    expected = {
+        'list_facets',
+        'get_facet',
+        'get_gene_variance_by_facet',
+    }
+    missing = expected - set(dir(AnthiveClient))
+    assert not missing, f"missing facet methods: {missing}"
+
+
+def test_list_facets_unwraps_envelope(monkeypatch):
+    """``list_facets()`` returns the ``facets`` list from the response
+    envelope, not the whole dict."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return {
+            'n_facets': 2,
+            'facets': [
+                {'facet': 'ant_disease', 'type': 'categorical',
+                 'type_mixed': False, 'n_datasets': 24,
+                 'signal_strength': 0.42},
+                {'facet': 'ant_age', 'type': 'numerical',
+                 'type_mixed': False, 'n_datasets': 12,
+                 'signal_strength': 0.11},
+            ],
+        }
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    facets = c.list_facets()
+    assert captured['path'] == '/facets'
+    assert captured['params'] is None
+    assert isinstance(facets, list)
+    assert len(facets) == 2
+    assert facets[0]['facet'] == 'ant_disease'
+    assert facets[0]['signal_strength'] == 0.42
+
+
+def test_get_facet_forwards_top_modules(monkeypatch):
+    """``get_facet(name, top_modules=N)`` sends ``top_modules`` as a
+    query param and returns the payload verbatim."""
+    captured = {}
+    payload = {
+        'facet': 'ant_disease',
+        'type': 'categorical',
+        'type_mixed': False,
+        'n_datasets': 3,
+        'total_n_cells': 12345,
+        'datasets': [
+            {'db_id': 'A01/PRI', 'title': 'X', 'group': 'g',
+             'group_id': 'g01', 'file_id': 'PRI', 'n_cells': 5000,
+             'kind_on_this_dataset': 'categorical'},
+        ],
+        'value_distribution': {
+            'kind': 'categorical',
+            'values': [{'value': 'AD', 'n_cells': 7000, 'n_datasets': 2}],
+            'total_cells': 12345,
+        },
+        'modules': {'rows': [], 'n_total': 0, 'truncated': False},
+    }
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return payload
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    result = c.get_facet('ant_disease', top_modules=50)
+    assert captured['path'] == '/facets/ant_disease'
+    assert captured['params'] == {'top_modules': 50}
+    assert result is payload
+    assert result['n_datasets'] == 3
+    assert result['value_distribution']['values'][0]['value'] == 'AD'
+
+
+def test_get_facet_default_top_modules(monkeypatch):
+    """Default ``top_modules`` is 200 and always rides through."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['params'] = params
+        return {'facet': 'ant_age', 'type': 'numerical',
+                'type_mixed': False, 'n_datasets': 1,
+                'total_n_cells': 100, 'datasets': [],
+                'value_distribution': {'kind': 'numerical',
+                                       'fleet_min': 0.0, 'fleet_max': 90.0,
+                                       'per_dataset': [], 'total_cells': 100},
+                'modules': {'rows': [], 'n_total': 0, 'truncated': False}}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.get_facet('ant_age')
+    assert captured['params'] == {'top_modules': 200}
+
+
+def test_get_gene_variance_by_facet_forwards_params(monkeypatch):
+    """``facet`` and ``top`` ride through as query params on the
+    ``/databases/{db_id}/gene-variance-by-facet`` route."""
+    captured = {}
+    payload = {
+        'db_id': 'Blackburn2026/main',
+        'facet': 'ant_disease',
+        'facet_type': 'categorical',
+        'layer': 'X',
+        'n_groups': 2,
+        'groups': ['AD', 'control'],
+        'n_cells_per_group': {'AD': 8000, 'control': 4000},
+        'n_genes_returned': 20,
+        'genes': [
+            {'gene': 'APOE', 'signal': 0.83,
+             'group_means': {'AD': 3.1, 'control': 1.2}},
+            {'gene': 'TREM2', 'signal': 0.62,
+             'group_means': {'AD': 2.4, 'control': 1.0}},
+        ],
+    }
+
+    def fake_get(path, params=None):
+        captured['path'] = path
+        captured['params'] = params
+        return payload
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    result = c.get_gene_variance_by_facet(
+        'Blackburn2026/main', 'ant_disease', top=20,
+    )
+    assert captured['path'] == (
+        '/databases/Blackburn2026/main/gene-variance-by-facet'
+    )
+    assert captured['params'] == {'facet': 'ant_disease', 'top': 20}
+    assert result['n_groups'] == 2
+    assert result['genes'][0]['gene'] == 'APOE'
+
+
+def test_get_gene_variance_by_facet_default_top(monkeypatch):
+    """Default ``top`` is 50."""
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured['params'] = params
+        return {'db_id': 'g/f', 'facet': 'ant_x', 'facet_type': 'categorical',
+                'layer': 'X', 'n_groups': 0, 'groups': [],
+                'n_cells_per_group': {}, 'n_genes_returned': 0, 'genes': []}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    c.get_gene_variance_by_facet('g/f', 'ant_x')
+    assert captured['params'] == {'facet': 'ant_x', 'top': 50}
+
+
+# ── only_facet filter on get_databases (0.6.0) ────────────────────────────
+
+
+def _fake_databases_with_collections():
+    """Fixed dataset list with mixed ``collection`` blocks."""
+    return [
+        {'id': 'A01/PRI', 'title': 'AD cohort A',
+         'collection': {'ant_disease': 'AD', 'ant_tissue': 'brain'}},
+        {'id': 'B02/PRI', 'title': 'Control cohort B',
+         'collection': {'ant_disease': 'control', 'ant_tissue': 'brain'}},
+        {'id': 'C03/PRI', 'title': 'PD cohort C',
+         'collection': {'ant_disease': 'PD', 'ant_tissue': 'brain'}},
+        {'id': 'D04/OLD', 'title': 'legacy row, no collection'},
+        {'id': 'E05/PRI', 'title': 'AD cohort with collection missing key',
+         'collection': {'ant_tissue': 'brain'}},
+    ]
+
+
+def test_get_databases_only_facet_keeps_matches(monkeypatch):
+    """``only_facet={'ant_disease': ['AD', 'control']}`` keeps only
+    the rows whose ``collection.ant_disease`` is in that list."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_with_collections()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    kept = c.get_databases(only_facet={'ant_disease': ['AD', 'control']})
+    ids = {db['id'] for db in kept}
+    assert ids == {'A01/PRI', 'B02/PRI'}
+
+
+def test_get_databases_only_facet_drops_missing_collection(monkeypatch):
+    """Rows without a ``collection`` block are excluded, not kept."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_with_collections()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    kept = c.get_databases(only_facet={'ant_disease': ['AD']})
+    ids = {db['id'] for db in kept}
+    assert ids == {'A01/PRI'}
+    assert 'D04/OLD' not in ids
+    assert 'E05/PRI' not in ids
+
+
+def test_get_databases_only_facet_composes_with_primary_only(monkeypatch):
+    """``primary_only`` and ``only_facet`` compose."""
+    rows = [
+        {'id': 'A/1', 'is_secondary': False,
+         'collection': {'ant_disease': 'AD'}},
+        {'id': 'B/1', 'is_secondary': True,
+         'collection': {'ant_disease': 'AD'}},
+        {'id': 'C/1', 'is_secondary': False,
+         'collection': {'ant_disease': 'control'}},
+    ]
+
+    def fake_get(path, params=None):
+        return {'databases': rows}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    kept = c.get_databases(primary_only=True,
+                           only_facet={'ant_disease': ['AD']})
+    assert [db['id'] for db in kept] == ['A/1']
+
+
+def test_get_databases_only_facet_default_is_noop(monkeypatch):
+    """No ``only_facet`` kwarg leaves the row list untouched."""
+    def fake_get(path, params=None):
+        return {'databases': _fake_databases_with_collections()}
+
+    c = AnthiveClient('http://x')
+    monkeypatch.setattr(c, '_get', fake_get)
+    dbs = c.get_databases()
+    assert len(dbs) == 5

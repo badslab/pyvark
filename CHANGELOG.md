@@ -3,6 +3,35 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.6.0 — 2026-09-02
+
+### Added
+
+- Three new methods on `AnthiveClient` that cover the fleet-wide facets
+  surface. `list_facets()` calls `GET /facets` and returns the inventory
+  of `ant_*` obs columns across every dataset, with type, mixed-type
+  flag, dataset count, and recorded signal strength per row.
+  `get_facet(name, top_modules=200)` calls `GET /facets/{name}` and
+  returns the detail payload for one facet, including per-dataset
+  summaries, value distribution, and the top module-variability rows.
+  `get_gene_variance_by_facet(db_id, facet, top=50)` calls
+  `GET /databases/{db_id}/gene-variance-by-facet` and ranks genes on
+  one dataset by between-group variance of their mean expression.
+- New `only_facet` kwarg on `AnthiveClient.get_databases`. Pass a
+  `{facet_name: [allowed_values]}` dict to filter datasets whose
+  `collection` block matches. Rows without a `collection` block or
+  without the requested key are dropped. The filter runs client-side
+  and composes with `primary_only`.
+
+### Docs
+
+- Documented three response fields on `get_database_info` that callers
+  can rely on. A top-level `description` field carries the dataset's
+  prose description. The `collection` sub-dict may include a `title`
+  key that overrides the group name for display (fall back to `group`
+  when absent) and a `date` key with the full `YYYY-MM-DD` publication
+  date.
+
 ## 0.5.0 — 2026-08-26
 
 ### Added — REST API 2.37 `is_secondary`
