@@ -25,6 +25,37 @@ The package is published as **`pyvark`** on PyPI; users import it as **`vark`**.
 
    Lock it down: `chmod 600 ~/.pypirc`.
 
+## Git remotes and the KU Leuven GitLab mirror
+
+Codeberg (`git@codeberg.org:mfiers/pyvark.git`) is the main repository.
+`git@gitlab.kuleuven.be:bdslab/anthive/pyvark.git` mirrors it, the same
+way anthive4 is mirrored. In the maintainer checkout `origin` fetches
+from Codeberg and has two push URLs, Codeberg first and GitLab second,
+so a plain `git push` updates both. `push.followTags` is on, so annotated
+release tags go along. A separate `gitlab` remote is there for checks
+(`git ls-remote gitlab`). To set up another clone the same way:
+
+```bash
+git remote set-url --add --push origin git@codeberg.org:mfiers/pyvark.git
+git remote set-url --add --push origin git@gitlab.kuleuven.be:bdslab/anthive/pyvark.git
+git remote add gitlab git@gitlab.kuleuven.be:bdslab/anthive/pyvark.git
+git config push.followTags true
+git remote set-head origin -d   # see the note below
+```
+
+Commits that reach Codeberg some other way (another clone, a pull
+request merged on codeberg.org) only reach GitLab at the next push from
+here. Catch up with:
+
+```bash
+git fetch origin && git push gitlab 'refs/remotes/origin/*:refs/heads/*' --follow-tags
+```
+
+GitLab refuses a branch called `HEAD` and then rejects the whole push,
+so this glob only works without the local `refs/remotes/origin/HEAD`
+symref. `git remote set-head origin -d` removes it; `git fetch` does not
+bring it back.
+
 ## Release workflow
 
 ```bash
