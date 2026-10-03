@@ -107,7 +107,7 @@ def test_get_group_404(client):
     """API 2.5+: unknown group_id should 404 cleanly, not 500."""
     import requests
     v = client.get_version()
-    if v.get('version', '0.0.0') < '2.5':
+    if tuple(int(part) for part in v.get('version', '0.0.0').split('.')[:2]) < (2, 5):
         pytest.skip('pre-2.5 server — /groups/{id} not present')
     with pytest.raises(requests.HTTPError) as ei:
         client.get_group('ZZZ_DOES_NOT_EXIST')

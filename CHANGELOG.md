@@ -3,6 +3,75 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.7.0 (unreleased)
+
+Targets anthive REST API 2.41.0 (`API_TARGET`).
+
+### Added
+
+- Paper library (API 2.39+). `list_papers()` with the server's filters
+  (`role`, `celltype`, `tissue`, `disease`, `method`, `cohort`,
+  `organism`, `author`, `year`, `q`), `get_paper()`,
+  `get_related_papers()`, `get_paper_page()`, `get_paper_bibtex()`,
+  `get_library_bibtex()`, `download_paper_pdf()`, `search_literature()`,
+  `get_database_papers()`, `get_database_context()` and
+  `get_library_status()`.
+- Paper upload (API 2.40+, uploaders only).
+  `get_paper_upload_requirements()`, `upload_paper()` (record as dict,
+  JSON, `.md` text or a path; PDF as path, bytes or file object;
+  `folder`, `role`, `papers_for`, `enrich`, `dry_run`, `update`),
+  `upload_papers()` for several papers in a row and
+  `paper_items_from_folder()` to pair `name.md` records with their PDFs.
+- New exceptions in `vark.exceptions`, all subclasses of
+  `requests.HTTPError`. `PaperUploadForbiddenError` (403, the caller is
+  not an uploader), `PaperUploadDisabledError` (503, uploads switched
+  off), `PaperDuplicateError` (409, with `existing_citekey` and
+  `matched_on`), `PaperInvalidError` (422, with `errors` and
+  `missing_required`), `PaperTooLargeError` (413) and `PaperNotPDFError`
+  (415).
+- Dataset files. `list_database_files()`, `download_database_file()`
+  (the `.h5ad`) and `download_static_file()`.
+- Endpoints the client did not cover yet. `get_obs_summary()`,
+  `get_obs_top()`, `get_mus_vocab()`, `list_geneset_studies()`,
+  `get_genesets_by_gene()`, `get_module_variability()` and
+  `rescan_module_variability()`.
+- New optional arguments. `attach_sessions` on `get_plot()` and
+  `analytics_query()` (plus `session_id` and `timeout` there),
+  `n_control`, `seed` and `subset` on `module_score()`, `top` on
+  `get_gene_stats()`, the dataset filters (`organism`, `cell_type`,
+  `source`, `access`, `tissue`, `include_remote`, `refresh`) on
+  `get_gene_stats_all()`, `organism` / `method` / `study` on
+  `list_genesets()`, `per_facet_value_limit` on `get_facet()`,
+  `duration_seconds` / `drain_timeout_seconds` on `admin_release()`.
+- Credentials from `ANTHIVE_USER` and `ANTHIVE_PASSWORD` when no
+  `auth=` is passed (before the vark CLI store; `~/.netrc` still works
+  through `requests`).
+
+### Fixed
+
+- `get_gene_stats()` no longer sends `layer=X` by default. The server
+  then uses the dataset's own default layer, as it does for every other
+  client. Pass `layer='X'` to get the old behaviour.
+- `module_score(format='dataframe')` built a frame from the wrong key
+  (the server returns no per-cell `cells`). It now returns a one-row
+  frame of the summary statistics. The `name` argument was never read
+  by the server; it is kept and documented as ignored.
+- `analytics_query(limit=...)` was sent but never read by the server;
+  it is no longer sent (the argument stays, documented as ignored).
+- The README's module-score recipe used a `column` key that the server
+  never returned. It now plots `module_score` through
+  `attach_sessions=score["session_id"]`.
+- `get_layers()` and `get_embeddings()` were documented as returning
+  lists; the server returns mappings (key to display name, key to
+  info). The return value is unchanged, the documentation is fixed.
+- Smoke tests compared API versions as strings, so a 2.41 server was
+  treated as older than 2.5 and the group tests were skipped.
+
+### Docs
+
+- README sections on credentials (never a password in code), the paper
+  library and uploads, and the integration test.
+
 ## 0.6.0 — 2026-09-02
 
 ### Added

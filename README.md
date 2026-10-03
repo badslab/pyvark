@@ -6,7 +6,7 @@ Python client for the [Anthive](https://codeberg.org/mfiers/anthive4)
 single-cell RNA-seq REST API. Sibling of the Go [`vark`](https://codeberg.org/mfiers/vark)
 CLI — same backend, two front ends.
 
-API surface verified against **anthive REST API 2.36.0** (2026-08-07).
+API surface verified against **anthive REST API 2.41.0** (2026-10-03).
 
 ## Why the dual name?
 
@@ -34,7 +34,7 @@ pip install pyvark          # or: uv add pyvark
 Version pin (semver-safe):
 
 ```sh
-pip install "pyvark>=0.4.0,<0.5"
+pip install "pyvark>=0.7.0,<0.8"
 ```
 
 Editable from a local checkout (development):
@@ -59,11 +59,12 @@ client = AnthiveClient()   # auto-detects {origin}/api/ in the browser
 ## Minimal example
 
 ```python
+import os
 from vark import AnthiveClient
 
 client = AnthiveClient(
     "https://my.anthive.example/api",
-    auth=("user", "password"),
+    auth=(os.environ["ANTHIVE_USER"], os.environ["ANTHIVE_PASSWORD"]),
 )
 
 # What's on this server?
@@ -87,6 +88,33 @@ open("umap.png", "wb").write(plot["bytes"])
 # The X-Plot-Caption header carries anthive's prose figure legend —
 # this is the ONLY place the multi-sentence caption exists.
 print(plot["caption"])
+```
+
+## Credentials
+
+Never put a password in a notebook or script. The client finds
+credentials in this order:
+
+1. `auth=` passed to the constructor, usually `(user, password)` read
+   from somewhere safe (`getpass.getpass()`, a secrets manager, the
+   environment). Any `requests.auth.AuthBase` also works.
+2. The `ANTHIVE_USER` and `ANTHIVE_PASSWORD` environment variables.
+3. The Go vark CLI's encrypted store (next section).
+4. `~/.netrc`, which `requests` reads by itself when nothing else gave
+   credentials:
+
+   ```
+   machine my.anthive.example
+   login me
+   password ...
+   ```
+
+   Keep it private with `chmod 600 ~/.netrc`.
+
+```sh
+export ANTHIVE_USER=me
+read -rs ANTHIVE_PASSWORD && export ANTHIVE_PASSWORD   # not in shell history
+python -c "from vark import AnthiveClient; print(AnthiveClient('https://my.anthive.example/api').get_version()['version'])"
 ```
 
 ## Reusing vark CLI credentials
@@ -213,8 +241,130 @@ discovery automatically (no filesystem in the browser).
   `MICROGLIA_V1_0`) + genesets (plain gene lists, two-segment id
   like `Sierksma2025/WGCNA`). Score recipes let you reproduce
   binary `*_pos` calls client-side (API 2.30+).
+* `list_facets`, `get_facet`, `get_gene_variance_by_facet`,
+  `get_module_variability`, `list_geneset_studies`,
+  `get_genesets_by_gene`, `get_obs_summary`, `get_obs_top`,
+  `get_mus_vocab`.
+* `list_database_files`, `download_database_file` (the `.h5ad`),
+  `download_static_file` (a collection's `static/` files).
+* Paper library (API 2.39+): `list_papers`, `get_paper`,
+  `get_related_papers`, `get_paper_page`, `get_paper_bibtex`,
+  `get_library_bibtex`, `download_paper_pdf`, `search_literature`,
+  `get_database_papers`, `get_database_context`, `get_library_status`.
+* Paper upload (API 2.40+, uploaders only): `get_paper_upload_requirements`,
+  `upload_paper`, `upload_papers`, `paper_items_from_folder`.
 * `pick_fastest(base_urls, ...)` — server-selection helper that
   consumes `/health` latency telemetry.
+
+## Paper library
+
+Every anthive site can hold a library of papers and other documents
+(articles, preprints, theses, reports, proposals). Each record is
+BibLaTeX-compatible and can be linked to datasets with a role
+(`source`, `reanalysis`, `method`, `related`, `background`). Everyone
+who can sign in to the site sees the whole library, and its text may be
+passed on to AI clients.
+
+```python
+from vark import AnthiveClient
+client = AnthiveClient("https://my.anthive.example/api")   # credentials as above
+
+# Browse and filter (all filters optional, they combine).
+for paper in client.list_papers(disease="Alzheimer disease", year="2020..2026"):
+    print(paper["citekey"], paper.get("title"))
+
+paper = client.get_paper("sankowski2019mapping")       # record, notes, datasets
+related = client.get_related_papers("sankowski2019mapping", kind=["cohort", "author"])
+
+# Which papers belong to a dataset, and a background pack for an LLM.
+papers = client.get_database_papers("S19/SMI")
+context = client.get_database_context("S19/SMI", level="brief", budget_tokens=4000)
+
+# Passages from the full text (needs the server's literature index).
+hits = client.search_literature("TREM2 microglia", k=5, section="results")
+for hit in hits["results"]:
+    print(hit)
+
+# BibTeX and PDFs.
+open("library.bib", "w").write(client.get_library_bibtex())
+open("one.bib", "w").write(client.get_paper_bibtex("sankowski2019mapping"))
+client.download_paper_pdf("sankowski2019mapping", dest=".")   # saved under the server's name
+pdf_bytes = client.download_paper_pdf("sankowski2019mapping")  # or keep it in memory
+```
+
+### Uploading papers
+
+Only members of the site's `library_upload_groups` (by default the
+admins) may upload, or even see the upload requirements. Everyone else
+gets `PaperUploadForbiddenError` (HTTP 403). On a site whose library is
+read-only, uploads raise `PaperUploadDisabledError` (HTTP 503) and
+nothing is written.
+
+```python
+from vark import (AnthiveClient, PaperDuplicateError, PaperInvalidError,
+                  PaperUploadDisabledError, PaperUploadForbiddenError)
+
+client = AnthiveClient("https://my.anthive.example/api")
+
+requirements = client.get_paper_upload_requirements()
+print(requirements["required"], requirements["default_role"])   # background
+
+record = {
+    "entrytype": "article",
+    "title": "Mapping microglia states in the human brain",
+    "author": ["Sankowski, Roman", "Prinz, Marco"],
+    "date": "2019-11-18",
+    "doi": "10.1038/s41593-019-0532-y",
+}
+try:
+    result = client.upload_paper(
+        record, "sankowski2019.pdf",
+        role="source",                    # anthive_role; default background
+        papers_for={"S19/SMI": "source"}, # proposed dataset link for a curator
+        dry_run=True,                     # validate + enrich, write nothing
+    )
+    print(result["status"], result["citekey"], result["missing_recommended"])
+except PaperDuplicateError as exc:
+    print("already there as", exc.existing_citekey, "matched on", exc.matched_on)
+except PaperInvalidError as exc:
+    print("invalid:", exc.errors, exc.missing_required)
+except PaperUploadForbiddenError:
+    print("this account may not add papers")
+except PaperUploadDisabledError:
+    print("uploads are switched off on this site")
+```
+
+`metadata` can also be the text of a `.md` record with YAML front matter
+or a `pathlib.Path` to one. `update=True` merges into an existing record
+instead of raising `PaperDuplicateError`. Set `role="source"` or
+`"reanalysis"` only when the data in anthive come from the paper.
+
+Documents other than articles work the same way. A report, thesis,
+unpublished manuscript or misc record needs `institution` or `note`
+instead of a DOI:
+
+```python
+client.upload_paper({
+    "entrytype": "report", "type": "project proposal",
+    "title": "Microglia states in ageing", "author": ["Doe, Jane"],
+    "year": 2026, "institution": "KU Leuven",
+}, "proposal.pdf")
+```
+
+Bulk upload is a loop on the client (the server takes one paper per
+request). Point it at a folder of `name.md` records with sibling
+`name.pdf` files:
+
+```python
+items = client.paper_items_from_folder("to_upload/")
+outcomes = client.upload_papers(items, dry_run=True)
+for outcome in outcomes:
+    print(outcome["index"], outcome["ok"], outcome["status"], outcome.get("citekey"))
+```
+
+`upload_papers` records duplicates and invalid records and goes on
+(`stop_on_error=True` re-raises the first one). A 403 or 503 stops the
+whole run at once, since no later paper could succeed either.
 
 ## Module catalogs (starCAT + genesets)
 
@@ -262,53 +412,67 @@ drop a new starCAT TSV or geneset YAML onto the store.
 
 ## Recipe — module-score vs gene on the XY plot (API 2.29+)
 
-REST API 2.29 lifted the restriction that made `attach_sessions`
-columns unusable as `x` / `y` on the XY plot endpoints (they
-worked as `color=` already). That unlocks the "score-vs-gene"
-figure — compute a module score on the fly, then plot it against a
-single gene's expression:
+`module_score` computes a Seurat-style score on the fly and answers
+with summary statistics plus a `session_id`. The per-cell scores stay
+on the server; attach the session to a plot and the column
+`module_score` becomes a plottable field:
 
 ```python
 from vark import AnthiveClient
 client = AnthiveClient("https://my.anthive.example/api")
-db_id = "Sierksma2025/microglia"
+db_id = "S25/V6W"
 
-# Compute a Seurat-style module score for a small gene list and
-# capture the session id the server hands back.
-score = client.module_score(
-    db_id,
-    genes=["APOE", "TREM2", "CD9", "SPP1"],
-    name="DAM_score",
-)
-session_col = score["column"]   # e.g. "session_1::DAM_score"
+score = client.module_score(db_id, genes=["APOE", "TREM2", "CD9", "SPP1"])
+print(score["genes_found"], score["summary"]["median"])
 
-# Now use the score as X on an XY scatter, gene expression as Y.
-# Pre-2.29 servers reject this with 400; 2.29+ returns a plot.
 plot = client.get_plot(
     db_id, "scatter",
-    x=session_col, y="SPP1",
+    x="module_score", y="SPP1",
+    attach_sessions=score["session_id"],
     color="cell_type",
     marginals="hist", regline=True,
     width=6, height=5, dpi=150,
 )
 open("dam_vs_spp1.png", "wb").write(plot["bytes"])
 print(plot["caption"])
+
+# The same session as a SQL table called `scores`.
+by_type = client.analytics_query(
+    db_id,
+    "SELECT o.cell_type, AVG(s.module_score) AS mean_score "
+    "FROM scores s JOIN obscat o USING (cell_name) GROUP BY 1",
+    attach_sessions=score["session_id"],
+)
 ```
 
-`session_col` is dataset-scoped and lives only inside this client's
-plot-request context — the server re-materialises it from the
-Parquet sidecar keyed on `session_id`. Nothing is written back to
-the duckdb.
+With two attached sessions the second one's column is called
+`session_1::module_score`. Sessions are temporary files on the server
+and expire; nothing is written back to the dataset. The dataset needs a
+`__gene_bins` table (built by `ant duckdb-check`), otherwise the server
+answers 400.
 
 ## Tests
 
 ```sh
-# Offline (no server needed):
-uv run --with pytest --with requests python -m pytest tests/test_offline.py -v
+# Offline, mocked HTTP (no server needed):
+uv run --with pytest --with requests --with pandas --no-project \
+    python -m pytest tests/ -v
+
+# Integration: start a throw-away ant-serve from an anthive4 tree on a
+# free loopback port, with a temporary state dir, store and a COPY of a
+# few library records (nothing is written outside pytest's tmp dir):
+git -C /path/to/anthive4 archive main | tar -x -C /tmp/anthive4-main
+ANTHIVE4_SOURCE=/tmp/anthive4-main \
+ANTHIVE_IT_LIBRARY=/path/to/anthive4/data/library \
+ANTHIVE_IT_CITEKEYS=sankowski2019mapping,ayhan2021resolving \
+ANTHIVE_IT_COLLECTION=/path/to/h5adstore/Sankowski2019 \
+ANTHIVE_IT_DATASET=S19/SMI \
+uv run --with pytest --with requests --with pandas --no-project \
+    python -m pytest tests/test_integration_server.py -v
 
 # Live smoke (round-trip):
 ANTHIVE_TEST_URL=https://my.anthive/api \
-ANTHIVE_TEST_USER=user ANTHIVE_TEST_PASSWORD=pass \
+ANTHIVE_TEST_USER=me ANTHIVE_TEST_PASSWORD="$(pass show anthive)" \
 uv run --with pytest --with requests --with pandas \
     python -m pytest tests/test_smoke.py -v
 ```

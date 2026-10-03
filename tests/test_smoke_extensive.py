@@ -226,7 +226,7 @@ def test_get_database_info_shape(client, db_id):
 def test_get_group_known_returns_collection(client, db_id):
     """API 2.5+: any db with a group_id (= prefix before '/') has a /groups/{id} entry."""
     v = client.get_version()
-    if v.get('version', '0.0.0') < '2.5':
+    if tuple(int(part) for part in v.get('version', '0.0.0').split('.')[:2]) < (2, 5):
         pytest.skip('pre-2.5 server')
     group_id = db_id.split('/')[0]
     g = client.get_group(group_id)
