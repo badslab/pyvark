@@ -213,7 +213,7 @@ discovery automatically (no filesystem in the browser).
   catalog + per-collection landing-page data (API 2.5+). Rows carry the
   lineage fields `designation`, `reanalysis_of`, `donor_group` and
   `has_donor_uid` on current servers.
-* `get_donor_groups` — datasets that share a donor pool (do not count
+* `get_donor_groups`: datasets that share a donor pool (do not count
   them as independent donors).
 * `get_plot(db_id, geom, ...)` — every server-side geom: `scatter`,
   `hexbin`, `kde2d`, `violin`, `box`, `bar`, `histogram`, `ecdf`,
