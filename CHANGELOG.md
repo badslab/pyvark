@@ -3,6 +3,46 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.9.0 (2026-10-05)
+
+Aligns with the "Unreleased" entries of anthive4's `doc/API_CHANGELOG.md`
+(main of 2026-10-05; `API_TARGET` stays `2.42.1` until the server bumps
+its version). Responses are passed through unchanged, so most of this is
+documentation; the code changes are small.
+
+### Changed
+
+- Facet `apoe_carrier` is now `apoe4_carrier` (column
+  `ant_apoe4_carrier`) in `TESTED_FACETS`, docstrings and README. The
+  server accepts the old name as a deprecated alias for one release;
+  `AnthiveClient.DEPRECATED_FACET_ALIASES` maps old to new.
+- Facet engine v2 documented. Replication entries of
+  `get_gene_facet_effects()` / `get_facet_gene_effects()` carry
+  `r_value`, `p_pc`, `k`, `m`, `replicated`, `r_direction`, `anchors`,
+  `overlap_unknown`, `cohorts_overlap_unknown`, `replication_u`,
+  `replication_method` and `legacy_badge`. `replicated` means a
+  partial-conjunction `r_value < 0.05`; "k of m" is descriptive only
+  (`FACET_TESTS_CAVEATS` and the docstrings say so). Units add `anchor`,
+  `pooled`, `p_treat`, `q_treat`, `tau_log2`, `analysis_level` and
+  `analysis_level_reason`; gene rows add `p_treat`, `q_treat`,
+  `tau_log2`; module rows add `passes_effect_gate`.
+- `get_facet_recurring_genes()` rows list replicated genes only and add
+  `r_value`, `p_pc`, `k`, `m`, `replicated`; the response adds
+  `n_replicated` and `n_genes_in_family` (kept in `df.attrs` with
+  `format='dataframe'`). The fields `units_up`, `units_down` and
+  `max_abs_logFC` no longer exist on the server.
+- `get_module_variability()` and `get_gene_variance_by_facet()` are
+  documented as per-cell and descriptive (cells are not replicates);
+  `signal_strength` of `list_facets()` is deprecated. The module
+  variability DataFrame keeps the server's `basis` in `df.attrs`.
+
+### Added
+
+- Dataset fields `replicate_unit`, `replicate_column`,
+  `replicate_basis` and `disease_basis` on `get_databases()` (DataFrame
+  columns) and `get_database_info()`, and on the facet test summary and
+  units.
+
 ## 0.8.0 (2026-10-05)
 
 Targets anthive REST API 2.42.1 plus the additions listed under

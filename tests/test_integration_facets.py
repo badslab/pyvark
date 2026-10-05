@@ -403,7 +403,7 @@ def test_gene_effects_counted_and_reasons(client):
         assert isinstance(entry['labels'], list)
         assert 'cl_id' in entry
         assert entry['cohorts_sig_same_sign'] <= entry['cohorts_tested']
-    assert 'k of m' in card['definition']
+    assert 'replicated' in card['definition']
 
 
 def test_gene_effects_dataframe(client):

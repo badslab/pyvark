@@ -44,10 +44,10 @@ def test_new_methods_exist():
 
 
 def test_tested_facets_and_caveats():
-    assert AnthiveClient.TESTED_FACETS == ('sex', 'disease', 'apoe_carrier', 'braak')
+    assert AnthiveClient.TESTED_FACETS == ('sex', 'disease', 'apoe4_carrier', 'braak')
     caveats = AnthiveClient.FACET_TESTS_CAVEATS.lower()
     for phrase in ('exploratory', 'donor', 'provisional', 'descriptive_only',
-                   'not_counted_reason', 'k of m independent cohorts'):
+                   'not_counted_reason', 'r_value < 0.05', 'k of m is descriptive'):
         assert phrase in caveats
 
 
@@ -374,3 +374,72 @@ def test_get_facet_cohorts_dataframe(http, client):
     http.queue(make_response(200, {'datasets': [{'db_id': 'A/B'}]}))
     frame = client.get_facet_cohorts(format='dataframe')
     assert frame['db_id'].tolist() == ['A/B']
+
+
+# ── facet engine v2, replicate fields, apoe4 rename ────────────────────
+
+
+def test_apoe4_rename_and_alias_map():
+    assert 'apoe_carrier' not in AnthiveClient.TESTED_FACETS
+    assert AnthiveClient.DEPRECATED_FACET_ALIASES == {
+        'apoe_carrier': 'apoe4_carrier',
+        'ant_apoe_carrier': 'ant_apoe4_carrier'}
+
+
+def test_recurring_genes_v2_fields_pass_through(http, client):
+    body = {'n_replicated': 12, 'n_genes_in_family': 9000,
+            'rows': [{'gene': 'PTPRG', 'r_value': 2e-14, 'p_pc': 1e-18,
+                      'k': 4, 'm': 5, 'replicated': True}]}
+    http.queue(make_response(200, body))
+    result = client.get_facet_recurring_genes('braak')
+    assert result['n_replicated'] == 12
+    assert result['rows'][0]['replicated'] is True
+    http.queue(make_response(200, body))
+    frame = client.get_facet_recurring_genes('braak', format='dataframe')
+    assert frame['r_value'].tolist() == [2e-14]
+    assert frame.attrs == {'n_replicated': 12, 'n_genes_in_family': 9000}
+
+
+def test_recurring_genes_dataframe_without_family_counts(http, client):
+    pytest.importorskip('pandas')
+    http.queue(make_response(200, {'rows': [{'gene': 'A'}]}))
+    assert client.get_facet_recurring_genes(
+        'sex', format='dataframe').attrs == {}
+
+
+def test_gene_facet_effects_v2_entry_passes_through(http, client):
+    entry = {'r_value': 1.0, 'replicated': False, 'k': 0, 'm': 2,
+             'anchors': [{'db_id': 'F24/INN', 'p_treat': 0.5}],
+             'replication_method': 'simes', 'legacy_badge': 'x'}
+    http.queue(make_response(200, {'gene': 'PTPRG', 'facets': {
+        'braak': {'replication': [entry], 'units': []}}}))
+    result = client.get_gene_facet_effects('PTPRG')
+    assert result['facets']['braak']['replication'][0] == entry
+
+
+def test_databases_replicate_columns(http, client):
+    pytest.importorskip('pandas')
+    rows = [{'id': 'AZ5/SLM', 'replicate_unit': 'donor',
+             'replicate_column': 'ant_donor', 'replicate_basis': 'declared',
+             'disease_basis': 'braak_cerad'}]
+    http.queue(make_response(200, {'databases': rows}))
+    frame = client.get_databases(format='dataframe')
+    assert frame.loc[0, 'replicate_unit'] == 'donor'
+    assert frame.loc[0, 'disease_basis'] == 'braak_cerad'
+
+
+def test_module_variability_dataframe_keeps_basis(http, client):
+    pytest.importorskip('pandas')
+    http.queue(make_response(200, {'basis': 'per-cell (descriptive)',
+                                   'rows': [{'module': 'm1',
+                                             'replicate_unit': 'donor'}]}))
+    frame = client.get_module_variability(format='dataframe')
+    assert frame.attrs['basis'] == 'per-cell (descriptive)'
+    assert frame['replicate_unit'].tolist() == ['donor']
+
+
+@pytest.mark.parametrize('name', ['get_module_variability',
+                                  'get_gene_variance_by_facet'])
+def test_per_cell_docstrings(name):
+    doc = getattr(AnthiveClient, name).__doc__
+    assert 'per-cell' in doc and 'descriptive' in doc

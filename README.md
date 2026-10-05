@@ -249,9 +249,15 @@ discovery automatically (no filesystem in the browser).
   `definitions_status`), `get_facet` (definition, per-dataset mapping,
   `exclude_secondary`), `get_database_facets`,
   `get_gene_variance_by_facet`,
-  `get_module_variability`, `list_geneset_studies`,
+  `get_module_variability` (both per-cell and descriptive, not
+  donor-level evidence), `list_geneset_studies`,
   `get_genesets_by_gene`, `get_obs_summary`, `get_obs_top`,
   `get_mus_vocab`.
+* `get_databases` rows and `get_database_info` carry `replicate_unit`,
+  `replicate_column`, `replicate_basis` and `disease_basis` (DataFrame
+  columns with `format='dataframe'`).
+* The APOE facet is `apoe4_carrier` (column `ant_apoe4_carrier`); the
+  server accepts `apoe_carrier` as a deprecated alias for one release.
 * Donor-level facet tests (exploratory): `get_facet_tests`,
   `get_facet_test_genes`, `get_facet_test_modules`,
   `get_facet_test_volcano`, `get_facet_tests_across_datasets`,
@@ -445,8 +451,14 @@ How to read the fields:
   cohort table, cohort role not counted, unmapped cell type, or another
   unit of the same dataset and cell type group has a more direct cell
   type source).
-* Replication is "q < 0.05 with the same sign in k of m independent
-  cohorts". A cohort is a row group of the DRAFT cohort table and counts
+* `replicated` is a partial-conjunction call: `r_value < 0.05` means the
+  effect is present in at least 2 independent cohorts, same direction
+  (Benjamini and Heller; Simes combination of the limma treat p values
+  of one anchor unit per cohort). `k` of `m` is descriptive (cohorts
+  individually at `q_treat < 0.05`). `get_facet_recurring_genes` lists
+  replicated genes only (`n_replicated`, `n_genes_in_family`). Units
+  with `analysis_level` `cell` are cell-level and descriptive only.
+  A cohort is a row group of the DRAFT cohort table and counts
   once. Cell type labels are counted by group (`microglial cell`,
   `Microglia` and `Mic P2RY12` are all `microglia`, with `cl_id`
   `CL:0000129`). When several strata of one dataset fall into one group,
