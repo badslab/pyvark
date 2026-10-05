@@ -5,9 +5,9 @@ recorded in `vark.AnthiveClient.API_TARGET`.
 
 ## 0.9.0 (2026-10-05)
 
-Aligns with the "Unreleased" entries of anthive4's `doc/API_CHANGELOG.md`
-(main of 2026-10-05; `API_TARGET` stays `2.42.1` until the server bumps
-its version). Responses are passed through unchanged, so most of this is
+Targets anthive REST API 2.43.0 (`API_TARGET`; anthive4's
+`doc/API_CHANGELOG.md`, 2026-10-05). Docstrings that said "anthive main
+after 2.42.1" now say "REST API 2.43.0+". Responses are passed through unchanged, so most of this is
 documentation; the code changes are small.
 
 ### Changed
