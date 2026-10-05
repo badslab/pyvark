@@ -3,6 +3,59 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.8.0 (2026-10-05)
+
+Targets anthive REST API 2.42.1 plus the additions listed under
+"Unreleased" in anthive4's `doc/API_CHANGELOG.md` on main of
+2026-10-05 (`API_TARGET` is `2.42.1` until the server bumps its
+version). Every addition is backward compatible; against older servers
+the new methods answer 404 and the new arguments are ignored.
+
+### Added
+
+- Donor-level facet test results (exploratory, donor-level, disease
+  contrast provisional; every docstring says how to read
+  `descriptive_only`, `counted` / `not_counted_reason` and the
+  replication rule). One dataset: `get_facet_tests()` (summary units
+  with flags and the `model` object), `get_facet_test_genes()` and
+  `get_facet_test_modules()` (all server filters, `format='json'`,
+  `'dataframe'` or `'csv'`), `get_facet_test_volcano()` (PNG bytes or a
+  file). Across datasets: `get_facet_tests_across_datasets()`
+  (`/facets/{name}/tests`), `get_facet_gene_effects()`
+  (`/facets/{name}/effects?gene=`, with cell type groups, `cl_id`,
+  `labels`, `q_counted`, `n_sibling_strata`),
+  `get_facet_recurring_genes()` (`/facets/{name}/effects/top`, ranked
+  by k, `agreement`, `median_abs_logFC`), `get_gene_facet_effects()`
+  (`/genes/{gene}/facet-effects`) and `get_facet_cohorts()` (the DRAFT
+  cohort table).
+- `AnthiveClient.TESTED_FACETS` (`sex`, `disease`, `apoe_carrier`,
+  `braak`) and `AnthiveClient.FACET_TESTS_CAVEATS`.
+- `get_donor_groups()` (`GET /donor-groups`, optional `donor_group`,
+  `format='dataframe'` gives one row per group and dataset). Extra
+  fields such as distinct donor counts are passed through.
+- `get_database_facets()` (`GET /databases/{id}/facets`, `counts`).
+- `exclude_secondary` (default `True`, the server default) on
+  `get_gene_stats_all()`, `get_module_variability()`, `get_facet()` and
+  the facet test views. The client sends it only when `False`.
+- `get_facet(mapping=...)` and `list_facets(full=True)` (returns
+  `facets_visible` and `definitions_status` next to the rows, which
+  carry `label`, `summary`, `defined` and `hidden_by_config`).
+- `get_gene_stats_all(format='dataframe')` has an `is_secondary`
+  column.
+- Docstrings of `get_databases()` / `get_database_info()` describe the
+  lineage fields `designation`, `reanalysis_of`, `donor_group` and
+  `has_donor_uid`.
+- `tests/test_facets_offline.py` (mocked HTTP) and
+  `tests/test_integration_facets.py` (a throw-away ant-serve serving
+  the real store read-only through a symlink mirror).
+
+### Audit
+
+Every existing method was compared with the routes and parameters of
+`bin/api/ant-serve` on anthive4 main. Apart from the
+`exclude_secondary` and `mapping` parameters above no mismatch was
+found.
+
 ## 0.7.0 (2026-10-03)
 
 Targets anthive REST API 2.41.0 (`API_TARGET`).

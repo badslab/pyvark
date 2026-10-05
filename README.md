@@ -210,7 +210,11 @@ discovery automatically (no filesystem in the browser).
   `get_changelog` — version + latency telemetry (`/health` exposes
   `mean_response_ms` / `p50_response_ms` / `n_samples`).
 * `get_databases`, `get_database_info`, `get_group(group_id)` —
-  catalog + per-collection landing-page data (API 2.5+).
+  catalog + per-collection landing-page data (API 2.5+). Rows carry the
+  lineage fields `designation`, `reanalysis_of`, `donor_group` and
+  `has_donor_uid` on current servers.
+* `get_donor_groups` — datasets that share a donor pool (do not count
+  them as independent donors).
 * `get_plot(db_id, geom, ...)` — every server-side geom: `scatter`,
   `hexbin`, `kde2d`, `violin`, `box`, `bar`, `histogram`, `ecdf`,
   `kde`, `heatmap`, `rolling`, `volcano`, `ma`, `forest`, `de_heatmap`,
@@ -241,10 +245,21 @@ discovery automatically (no filesystem in the browser).
   `MICROGLIA_V1_0`) + genesets (plain gene lists, two-segment id
   like `Sierksma2025/WGCNA`). Score recipes let you reproduce
   binary `*_pos` calls client-side (API 2.30+).
-* `list_facets`, `get_facet`, `get_gene_variance_by_facet`,
+* `list_facets` (`full=True` for `facets_visible` and
+  `definitions_status`), `get_facet` (definition, per-dataset mapping,
+  `exclude_secondary`), `get_database_facets`,
+  `get_gene_variance_by_facet`,
   `get_module_variability`, `list_geneset_studies`,
   `get_genesets_by_gene`, `get_obs_summary`, `get_obs_top`,
   `get_mus_vocab`.
+* Donor-level facet tests (exploratory): `get_facet_tests`,
+  `get_facet_test_genes`, `get_facet_test_modules`,
+  `get_facet_test_volcano`, `get_facet_tests_across_datasets`,
+  `get_facet_gene_effects`, `get_facet_recurring_genes`,
+  `get_gene_facet_effects`, `get_facet_cohorts`. See below.
+* `exclude_secondary` (default `True`) on `get_gene_stats_all`,
+  `get_module_variability`, `get_facet` and the facet test views keeps
+  reanalyses out of pooled numbers.
 * `list_database_files`, `download_database_file` (the `.h5ad`),
   `download_static_file` (a collection's `static/` files).
 * Paper library (API 2.39+): `list_papers`, `get_paper`,
@@ -366,6 +381,82 @@ for outcome in outcomes:
 (`stop_on_error=True` re-raises the first one). A 403 or 503 stops the
 whole run at once, since no later paper could succeed either.
 
+## Donor-level facet tests
+
+The server serves the output of anthive's donor-level facet tests: for
+each dataset and cell type, raw counts are summed per donor and genes
+are tested with limma-voom against sex (m vs f), disease (AD vs
+control), APOE e4 carrier status and Braak stage (trend per stage),
+with module scores tested by OLS plus label permutations.
+
+Read these results with their limits in mind. They are **exploratory**.
+The unit of analysis is the **donor**, so n is the number of donors, not
+cells. Each (dataset, cell type) unit is tested on its own; nothing is
+pooled and there is no meta-analysis, and datasets share donors. The
+**disease** contrast is **provisional**: "control" means different
+things between studies and the vocabulary is not settled.
+`AnthiveClient.FACET_TESTS_CAVEATS` holds the same text.
+
+```python
+from vark import AnthiveClient
+client = AnthiveClient("https://my.anthive/api")
+
+# One dataset: one unit per (facet, cell type), with flags and the model.
+summary = client.get_facet_tests("G24/MMG")
+for unit in summary["units"]:
+    if unit["tested"]:
+        print(unit["facet"], unit["cell_type"], unit["level_counts"],
+              unit["flags"]["descriptive_only"],
+              unit["model"]["genes"]["formula"])
+
+# Gene rows of one unit (q is BH within the unit); CSV or a DataFrame.
+genes = client.get_facet_test_genes("G24/MMG", facet="sex",
+                                    cell_type="microglial cell", limit=20)
+frame = client.get_facet_test_genes("G24/MMG", facet="braak", q=1,
+                                    limit=2000, format="dataframe")
+png = client.get_facet_test_volcano("G24/MMG", "sex", "microglial cell")
+
+# One gene across every tested dataset, with the replication count.
+card = client.get_facet_gene_effects("sex", "XIST", cell_type="microglia")
+for entry in card["replication"]:
+    print(entry["celltype_group"], entry["badge"])
+for unit in card["units"]:
+    print(unit["db_id"], unit["logFC"], unit["q_value"],
+          unit["counted"], unit["not_counted_reason"])
+
+# Genes that change in the most independent cohorts.
+top = client.get_facet_recurring_genes("sex", cell_type="microglia", n=20)
+print(top["ranking"])
+for row in top["rows"]:
+    print(row["gene"], row["cohorts_sig_same_sign"], "of",
+          row["cohorts_tested"], row["agreement"], row["direction"])
+
+# Which datasets share donors, and the DRAFT cohort table.
+groups = client.get_donor_groups()
+cohorts = client.get_facet_cohorts()
+```
+
+How to read the fields:
+
+* `descriptive_only`: a level has fewer than 5 donors (Braak: fewer than
+  10). p, q, t and the CI are null; only the effect estimate is given.
+* `counted`: the unit counts towards replication. `not_counted_reason`
+  says why not (secondary dataset, descriptive only, dataset not in the
+  cohort table, cohort role not counted, unmapped cell type, or another
+  unit of the same dataset and cell type group has a more direct cell
+  type source).
+* Replication is "q < 0.05 with the same sign in k of m independent
+  cohorts". A cohort is a row group of the DRAFT cohort table and counts
+  once. Cell type labels are counted by group (`microglial cell`,
+  `Microglia` and `Mic P2RY12` are all `microglia`, with `cl_id`
+  `CL:0000129`). When several strata of one dataset fall into one group,
+  their q is multiplied by `n_sibling_strata` (`q_counted`). The full
+  rule is in the response's `definition`.
+* `composition_flag`: the share of a donor's cells in the stratum
+  differs with the facet, so an effect may reflect composition.
+* `dataset_changed`: the dataset changed since the run; results may be
+  stale.
+
 ## Module catalogs (starCAT + genesets)
 
 Anthive REST API 2.30 unifies starCAT programs and genesets behind a
@@ -469,6 +560,14 @@ ANTHIVE_IT_COLLECTION=/path/to/h5adstore/Sankowski2019 \
 ANTHIVE_IT_DATASET=S19/SMI \
 uv run --with pytest --with requests --with pandas --no-project \
     python -m pytest tests/test_integration_server.py -v
+
+# Integration, facets: the same throw-away server, but serving the REAL
+# h5adstore read-only through a symlink mirror (caches land in the tmp
+# dir; the test fails if any real store file changes):
+ANTHIVE4_SOURCE=/tmp/anthive4-main \
+ANTHIVE_IT_STORE=/path/to/h5adstore \
+uv run --with pytest --with requests --with pandas --no-project \
+    python -m pytest tests/test_integration_facets.py -v
 
 # Live smoke (round-trip):
 ANTHIVE_TEST_URL=https://my.anthive/api \
