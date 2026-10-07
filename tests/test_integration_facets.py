@@ -416,10 +416,11 @@ def test_recurring_genes_ranking(client):
     result = client.get_facet_recurring_genes('sex', n=30)
     assert result['ranking']
     assert result['celltype_group'] == result['cell_type']
-    keys = [(-row['cohorts_sig_same_sign'], -(row['agreement'] or 0),
+    keys = [(row['r_value'], -row['k'], -(row['agreement'] or 0),
              -(row['median_abs_logFC'] or 0)) for row in result['rows']]
     assert keys == sorted(keys)
     for row in result['rows']:
+        assert row['replicated'] and row['r_value'] < 0.05
         assert row['cohorts_same_sign'] <= row['cohorts_tested']
         assert 0 <= row['agreement'] <= 1
 

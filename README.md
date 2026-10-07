@@ -261,6 +261,10 @@ discovery automatically (no filesystem in the browser).
   `AnthiveClient.TESTED_FACETS` lists the nine facets with donor-level
   results, `FACET_SCOPES` the facet scopes, `DEPRECATED_FACETS` the
   deprecated facets and what replaces them.
+* Plain-language help (API 2.44.0): `explain("replication")` returns
+  the maintainers' text as markdown; `get_help`, `get_help_topic`,
+  `get_glossary`, `get_glossary_term` and `search_help` give the parts.
+  Facet and context responses list `help_topics` to read first.
 * Facet scopes (API 2.44.0): `get_facet`, the facet test views and
   `get_module_variability` take `scope=` (`human_postmortem`,
   `xenograft_human_in_mouse`, `in_vitro`). Human and mouse never mix.

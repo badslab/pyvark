@@ -50,8 +50,17 @@ changes are the `scope` argument and a few class constants.
   and `get_database_info()`; `facet_exclude` / `facet_exclude_reason`
   (dataset `.md` fields, not served by `/databases`) explained.
 
+- Plain-language help: `get_help()`, `get_help_topic(topic,
+  include_children=True)`, `get_glossary(format='markdown')`,
+  `get_glossary_term(term)`, `search_help(q)` and `explain(topic_or_term)`
+  (search, then fetch the best topic or term; mirrors the MCP `explain`
+  tool). `help_topics` in facet, facet-test and dataset-context
+  responses passes through and is named in the docstrings.
+
 ### Changed (API 2.44.0)
 
+- The integration test of the recurring-genes ranking checks the
+  current order (`r_value`, then `k`, `agreement`, `median_abs_logFC`).
 - `get_library_status()` docstring: non-admins no longer get
   `unresolved_references`, issue texts, `library_dir` or `index.path`
   (issue lists are empty); `n_errors` and `n_warnings` are new.

@@ -280,3 +280,32 @@ def test_module_variability_scope(client):
     result = client.get_module_variability(
         scope='xenograft_human_in_mouse', limit=5)
     assert result['rows'] is not None
+
+
+# ── help API (REST API 2.44.0) ──────────────────────────────────────────────
+
+
+def test_help_roundtrip(client):
+    _needs_2_44(client)
+    index = client.get_help()
+    assert index['topics'] and index['glossary']
+    topic = client.get_help_topic(index['topics'][0]['id'])
+    assert topic['body'] and topic['title']
+    term = client.get_glossary_term(index['glossary'][0]['slug'])
+    assert term['definition']
+    assert client.get_glossary()['terms']
+    assert client.search_help('replicate unit')['matches']
+
+
+def test_explain_live(client):
+    _needs_2_44(client)
+    assert client.explain('replicate unit').startswith('# ')
+    assert '# Anthive help topics' in client.explain('')
+
+
+def test_facet_tests_carry_help_topics(client):
+    _needs_2_44(client)
+    result = client.get_facet_recurring_genes('braak', n=1)
+    assert 'facet-effects' in result['help_topics']
+    for topic_id in result['help_topics']:
+        assert client.get_help_topic(topic_id)['body']

@@ -1884,6 +1884,8 @@ class AnthiveClient:
         summary of one dataset: one unit per (facet, cell type stratum).
 
         Exploratory, donor-level; the disease contrast is provisional.
+        Responses carry ``help_topics`` (REST API 2.44.0+): topic ids for
+        :meth:`get_help_topic` that explain how to read the numbers.
         Genes are tested with limma-voom on donor pseudobulks
         (``expression ~ facet + sex + age + pmi + batch`` where
         available), module scores with OLS on donor-level scores plus
@@ -2125,6 +2127,9 @@ class AnthiveClient:
         ``facet_scope`` and counting stays per scope); the response
         carries ``scope`` and ``scopes``.
 
+        Responses carry ``help_topics`` (REST API 2.44.0+): topic ids for
+        :meth:`get_help_topic` that explain how to read the numbers.
+
         Returns ``{facet, facet_column, exclude_secondary, n_rows,
         n_datasets_tested, rows, not_tested, q_threshold}``. Each row
         carries the unit fields of :meth:`get_facet_tests` (contrast,
@@ -2178,6 +2183,9 @@ class AnthiveClient:
         type tested separately (limma-voom, n = donors); nothing is
         pooled and there is no meta-analysis. The disease contrast is
         provisional. The cohort table is a DRAFT.
+
+        Responses carry ``help_topics`` (REST API 2.44.0+): topic ids for
+        :meth:`get_help_topic` that explain how to read the numbers.
 
         Returns ``{query, scope, scopes, facet, gene, gene_flags,
         n_units, units, replication, cell_types, notes, apoe_locus,
@@ -2333,6 +2341,9 @@ class AnthiveClient:
         is provisional and the cohort table is a DRAFT. A high rank is a
         count of separate significant results, not a pooled estimate.
 
+        Responses carry ``help_topics`` (REST API 2.44.0+): topic ids for
+        :meth:`get_help_topic` that explain how to read the numbers.
+
         Only genes that pass the effect gate and are replicated are
         listed (partial-conjunction ``r_value < 0.05``, effect present
         in at least 2 independent cohorts, same direction, and at least
@@ -2415,6 +2426,9 @@ class AnthiveClient:
         """``GET /genes/{gene}/facet-effects``. Result cards of one gene
         for every tested facet (:attr:`TESTED_FACETS`).
 
+        The response carries ``help_topics`` (see
+        :meth:`get_help_topic`).
+
         Returns ``{gene, scope, facets: {facet: card}}``; each card has
         the shape of :meth:`get_facet_gene_effects`. Without ``scope``
         (REST API 2.44.0+) ``facets`` holds one card per facet in its
@@ -2467,6 +2481,150 @@ class AnthiveClient:
             import pandas as pd
             return pd.DataFrame(result.get('datasets', []))
         return result
+
+    # ── Plain-language help (REST API 2.44.0+) ──────────────────────────
+    #
+    # The maintainers' own explanations of facets, replication, scopes,
+    # caveats and the glossary (the same texts as the web help page and
+    # the MCP ``explain`` tool). Facet, facet-test and dataset-context
+    # responses carry ``help_topics``: topic ids to pass to
+    # :meth:`get_help_topic`.
+
+    def get_help(self) -> Dict:
+        """``GET /help``. Index of the plain-language help (REST API
+        2.44.0+).
+
+        Returns ``{topics, glossary}``: ``topics`` is a list of
+        ``{id, title, summary}`` and ``glossary`` a list of
+        ``{slug, term}``. Responses of the facet endpoints, the facet
+        tests and :meth:`get_database_context` carry ``help_topics``,
+        a list of topic ids to read with :meth:`get_help_topic` before
+        you interpret the numbers. Quote these texts rather than
+        paraphrasing them from memory.
+        """
+        return self._get('/help')
+
+    def get_help_topic(self, topic: str,
+                       include_children: bool = True) -> Dict:
+        """``GET /help/{topic}``. One help topic (REST API 2.44.0+).
+
+        Returns ``{id, title, summary, body, children, related, terms,
+        anchor}``. ``body`` is markdown; ``children`` are the ids of
+        subsection topics (already appended to ``body`` unless
+        ``include_children`` is ``False``); ``related`` are topic ids
+        and ``terms`` glossary slugs for :meth:`get_glossary_term`.
+        The topics named in ``help_topics`` of the facet and context
+        responses are ``facet-effects``, ``facet-counting``,
+        ``facet-replicate-unit``, ``facet-howto``, ``facet-scopes``,
+        ``donor-groups``, ``dataset-caveats``, ``per-cell-per-donor``
+        and ``dataset-versions``.
+
+        Args:
+            topic: Topic id from :meth:`get_help` or ``help_topics``.
+            include_children: ``False`` leaves the subsections out of
+                ``body``. Sent only when ``False``.
+
+        Raises:
+            requests.HTTPError: 404 for an unknown id (the message lists
+                close matches).
+        """
+        params = {'include_children': 'false'} if not include_children else None
+        return self._get(f'/help/{topic}', params=params)
+
+    def get_glossary(self, format: str = 'markdown') -> Dict:
+        """``GET /help/glossary``. Every glossary term with its
+        definition (REST API 2.44.0+).
+
+        Returns ``{format, terms}`` with ``terms`` a list of ``{slug,
+        term, definition}``.
+
+        Args:
+            format: ``'markdown'`` (default) or ``'html'``.
+        """
+        if format not in ('markdown', 'html'):
+            raise ValueError(
+                f"format must be 'markdown' or 'html', got {format!r}")
+        params = {'format': format} if format != 'markdown' else None
+        return self._get('/help/glossary', params=params)
+
+    def get_glossary_term(self, term: str) -> Dict:
+        """``GET /help/glossary/{term}``. One glossary term by slug, for
+        example ``'replicate-unit'`` or ``'r-value'`` (REST API
+        2.44.0+).
+
+        Returns ``{slug, term, definition, anchor}``.
+
+        Raises:
+            requests.HTTPError: 404 for an unknown slug (the message
+                lists close matches).
+        """
+        return self._get(f'/help/glossary/{term}')
+
+    def search_help(self, q: str) -> Dict:
+        """``GET /help/search?q=``. Fuzzy match of ``q`` against topic
+        ids, titles and glossary terms (REST API 2.44.0+).
+
+        Returns ``{query, matches}``; ``matches`` is a list of ``{id,
+        kind, score, title}`` ordered best first, ``kind`` being
+        ``'topic'`` (fetch with :meth:`get_help_topic`) or ``'term'``
+        (fetch with :meth:`get_glossary_term`).
+        """
+        return self._get('/help/search', params={'q': q})
+
+    def explain(self, topic_or_term: str = '') -> str:
+        """Plain-language explanation of an Anthive concept as markdown
+        (REST API 2.44.0+). Mirrors the MCP ``explain`` tool.
+
+        Searches the help (:meth:`search_help`) and returns the best
+        matching topic (title, summary, body, related topics and
+        glossary terms) or glossary term, followed by the other close
+        matches. An empty or unmatched query returns the list of topics
+        and glossary terms. Use it before explaining facets,
+        replication, scopes, replicate units or caveats, and quote the
+        text instead of improvising.
+
+        Args:
+            topic_or_term: Topic id, title or glossary term, matched
+                fuzzily (``'facet-counting'``, ``'replicate unit'``,
+                ``'r-value'``).
+
+        Returns:
+            Markdown text.
+        """
+        query = (topic_or_term or '').strip()
+        if query:
+            matches = self.search_help(query).get('matches', [])
+            if matches:
+                best = matches[0]
+                if best['kind'] == 'term':
+                    data = self.get_glossary_term(best['id'])
+                    text = f"# {data['term']} (glossary)\n\n{data['definition']}"
+                else:
+                    data = self.get_help_topic(best['id'])
+                    parts = [f"# {data['title']}", '', data['summary'], '',
+                             data['body']]
+                    if data.get('related'):
+                        parts += ['', 'Related topics: ' + ', '.join(
+                            f'`{ident}`' for ident in data['related'])]
+                    if data.get('terms'):
+                        parts += ['Glossary terms: ' + ', '.join(
+                            f'`{slug}`' for slug in data['terms'])]
+                    text = '\n'.join(parts)
+                others = [f"{hit['kind']} `{hit['id']}`"
+                          for hit in matches[1:]]
+                if others:
+                    text += '\n\nOther close matches: ' + ', '.join(others)
+                return text
+        prefix = (f"No help topic or glossary term matches '{query}'.\n\n"
+                  if query else '')
+        index = self.get_help()
+        lines = ['# Anthive help topics', '']
+        lines += [f"- `{topic['id']}`: {topic['title']}. {topic['summary']}"
+                  for topic in index.get('topics', [])]
+        terms = ', '.join(f"`{term['slug']}`"
+                          for term in index.get('glossary', []))
+        lines += ['', '## Glossary terms', '', terms or '(none)']
+        return prefix + '\n'.join(lines)
 
     # ── Dataset summaries + downloads ───────────────────────────────────
 
@@ -2693,7 +2851,10 @@ class AnthiveClient:
         analysing a dataset with an LLM: metadata, caveats, obs columns,
         module scores, source papers with methods passages and related
         papers, trimmed to about ``budget_tokens`` (200 to 50000).
-        ``level`` is ``'brief'`` or ``'full'``."""
+        ``level`` is ``'brief'`` or ``'full'``. REST API 2.44.0+ adds
+        ``help_topics`` (``dataset-caveats``, ``facet-replicate-unit``,
+        ``per-cell-per-donor``, ``dataset-versions``) for
+        :meth:`get_help_topic`."""
         return self._get(f'/databases/{db_id}/context',
                          params={'level': level,
                                  'budget_tokens': budget_tokens})

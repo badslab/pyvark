@@ -572,3 +572,114 @@ def test_facet_docstrings_name_new_facets():
     for name in ('persists_after_pathology_adjustment', 'below_floor',
                  'lambda_gc', 'covariates_dropped', 'age_adjusted'):
         assert name in tests_doc
+
+
+# ── help API (REST API 2.44.0) ──────────────────────────────────────────
+
+
+def test_help_endpoints(http, client):
+    http.queue(make_response(200, {'topics': [], 'glossary': []}))
+    client.get_help()
+    assert http.last['url'] == f'{BASE}/help'
+    http.queue(make_response(200, {'id': 'facet-effects'}))
+    client.get_help_topic('facet-effects')
+    assert http.last['url'] == f'{BASE}/help/facet-effects'
+    assert not http.last['params']
+    http.queue(make_response(200, {'id': 'facet-effects'}))
+    client.get_help_topic('facet-effects', include_children=False)
+    assert http.last['params'] == {'include_children': 'false'}
+    http.queue(make_response(200, {'terms': []}))
+    client.get_glossary()
+    assert http.last['url'] == f'{BASE}/help/glossary'
+    assert not http.last['params']
+    http.queue(make_response(200, {'terms': []}))
+    client.get_glossary(format='html')
+    assert http.last['params'] == {'format': 'html'}
+    http.queue(make_response(200, {'slug': 'r-value'}))
+    client.get_glossary_term('r-value')
+    assert http.last['url'] == f'{BASE}/help/glossary/r-value'
+    http.queue(make_response(200, {'matches': []}))
+    client.search_help('replicate unit')
+    assert http.last['url'] == f'{BASE}/help/search'
+    assert http.last['params'] == {'q': 'replicate unit'}
+
+
+def test_get_glossary_bad_format(client):
+    with pytest.raises(ValueError):
+        client.get_glossary(format='pdf')
+
+
+def test_help_404_raises(http, client):
+    http.queue(make_response(404, {'detail': "Unknown help topic 'x'"}))
+    with pytest.raises(requests.HTTPError):
+        client.get_help_topic('x')
+
+
+TOPIC = {'id': 'facet-counting', 'title': 'Counting', 'summary': 'Sum.',
+         'body': 'Body text.', 'related': ['facet-effects'],
+         'terms': ['r-value']}
+
+
+def test_explain_topic(http, client):
+    http.queue(make_response(200, {'matches': [
+        {'id': 'facet-counting', 'kind': 'topic', 'score': 1, 'title': 'C'},
+        {'id': 'r-value', 'kind': 'term', 'score': 0.5, 'title': 'r'}]}))
+    http.queue(make_response(200, TOPIC))
+    text = client.explain('counting')
+    assert http.last['url'] == f'{BASE}/help/facet-counting'
+    assert text.startswith('# Counting\n\nSum.\n\nBody text.')
+    assert 'Related topics: `facet-effects`' in text
+    assert 'Glossary terms: `r-value`' in text
+    assert text.endswith('Other close matches: term `r-value`')
+
+
+def test_explain_term(http, client):
+    http.queue(make_response(200, {'matches': [
+        {'id': 'r-value', 'kind': 'term', 'score': 1, 'title': 'r'}]}))
+    http.queue(make_response(200, {'slug': 'r-value', 'term': 'r-value',
+                                   'definition': 'Defn.'}))
+    assert client.explain('r-value') == '# r-value (glossary)\n\nDefn.'
+
+
+def test_explain_topic_without_links(http, client):
+    http.queue(make_response(200, {'matches': [
+        {'id': 't', 'kind': 'topic', 'score': 1, 'title': 'T'}]}))
+    http.queue(make_response(200, {'title': 'T', 'summary': 'S', 'body': 'B'}))
+    assert client.explain('t') == '# T\n\nS\n\nB'
+
+
+INDEX = {'topics': [{'id': 'facet-effects', 'title': 'Effects',
+                     'summary': 'How.'}],
+         'glossary': [{'slug': 'r-value', 'term': 'r-value'}]}
+
+
+@pytest.mark.parametrize('query', ['', '   ', 'zzz'])
+def test_explain_falls_back_to_index(http, client, query):
+    if query.strip():
+        http.queue(make_response(200, {'matches': []}))
+    http.queue(make_response(200, INDEX))
+    text = client.explain(query)
+    assert '- `facet-effects`: Effects. How.' in text
+    assert '`r-value`' in text
+    assert text.startswith('No help topic' if query.strip()
+                           else '# Anthive help topics')
+
+
+def test_explain_empty_glossary(http, client):
+    http.queue(make_response(200, {'topics': [], 'glossary': []}))
+    assert client.explain().endswith('(none)')
+
+
+@pytest.mark.parametrize('name', [
+    'get_facet_tests', 'get_facet_tests_across_datasets',
+    'get_facet_gene_effects', 'get_facet_recurring_genes',
+    'get_gene_facet_effects', 'get_database_context'])
+def test_help_topics_documented(name):
+    assert 'help_topics' in getattr(AnthiveClient, name).__doc__
+
+
+def test_help_topics_pass_through(http, client):
+    http.queue(make_response(200, {'gene': 'A', 'facets': {},
+                                   'help_topics': ['facet-effects']}))
+    assert client.get_gene_facet_effects('A')['help_topics'] == [
+        'facet-effects']
