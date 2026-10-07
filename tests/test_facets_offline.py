@@ -44,10 +44,14 @@ def test_new_methods_exist():
 
 
 def test_tested_facets_and_caveats():
-    assert AnthiveClient.TESTED_FACETS == ('sex', 'disease', 'apoe4_carrier', 'braak')
+    assert AnthiveClient.TESTED_FACETS == (
+        'sex', 'disease', 'apoe4_carrier', 'apoe4_dose', 'braak',
+        'braak_threshold', 'age', 'age_adjusted', 'app_nlgf')
     caveats = AnthiveClient.FACET_TESTS_CAVEATS.lower()
-    for phrase in ('exploratory', 'donor', 'provisional', 'descriptive_only',
-                   'not_counted_reason', 'r_value < 0.05', 'k of m is descriptive'):
+    for phrase in ('exploratory', 'replicate', 'provisional', 'small_sample',
+                   'below_floor', 'not_counted_reason', 'r_value < 0.05',
+                   'effect_gate_passed', 'replicated_effect', 'lambda_gc',
+                   'k of m is descriptive', 'per scope'):
         assert phrase in caveats
 
 
@@ -59,7 +63,7 @@ def test_tested_facets_and_caveats():
 def test_facet_test_docstrings_state_caveats(name):
     doc = getattr(AnthiveClient, name).__doc__.lower()
     assert 'exploratory' in doc
-    assert 'donor' in doc
+    assert 'donor' in doc or 'replicate' in doc
     assert 'provisional' in doc
 
 
@@ -443,3 +447,128 @@ def test_module_variability_dataframe_keeps_basis(http, client):
 def test_per_cell_docstrings(name):
     doc = getattr(AnthiveClient, name).__doc__
     assert 'per-cell' in doc and 'descriptive' in doc
+
+
+# ── API 2.44.0: facet scopes, replication tiers, new constants ──────────
+
+
+SCOPE_METHODS = [
+    ('get_facet', ('ant_age',), '/facets/ant_age'),
+    ('get_facet_tests_across_datasets', ('age',), '/facets/age/tests'),
+    ('get_facet_gene_effects', ('age', 'APOE'), '/facets/age/effects'),
+    ('get_facet_recurring_genes', ('age',), '/facets/age/effects/top'),
+    ('get_gene_facet_effects', ('TREM2',), '/genes/TREM2/facet-effects'),
+    ('get_module_variability', (), '/module-variability'),
+]
+
+
+def test_api_target_and_constants():
+    assert AnthiveClient.API_TARGET == '2.44.0'
+    assert AnthiveClient.FACET_SCOPES == (
+        'human_postmortem', 'xenograft_human_in_mouse', 'in_vitro')
+    assert AnthiveClient.DEFAULT_FACET_SCOPE == 'human_postmortem'
+    assert 'mouse_in_vivo' not in AnthiveClient.FACET_SCOPES
+    deprecated = AnthiveClient.DEPRECATED_FACETS
+    assert deprecated['region'] == ['tissue']
+    assert len(deprecated['author_cluster']) == 7
+    assert deprecated['lesion'] == []
+
+
+@pytest.mark.parametrize('method,args,path', SCOPE_METHODS)
+def test_scope_is_sent_when_given(http, client, method, args, path):
+    http.queue(make_response(200, {'scope': 'xenograft_human_in_mouse'}))
+    result = getattr(client, method)(
+        *args, scope='xenograft_human_in_mouse')
+    assert http.last['url'] == f'{BASE}{path}'
+    assert http.last['params']['scope'] == 'xenograft_human_in_mouse'
+    assert result['scope'] == 'xenograft_human_in_mouse'
+
+
+@pytest.mark.parametrize('method,args,path', SCOPE_METHODS)
+def test_scope_is_not_sent_by_default(http, client, method, args, path):
+    http.queue(make_response(200, {}))
+    getattr(client, method)(*args)
+    assert 'scope' not in (http.last['params'] or {})
+
+
+@pytest.mark.parametrize('method,args,path', SCOPE_METHODS)
+def test_scope_docstring(method, args, path):
+    doc = getattr(AnthiveClient, method).__doc__
+    assert 'scope' in doc and 'FACET_SCOPES' in doc
+
+
+def test_unknown_scope_raises_http_error(http, client):
+    http.queue(make_response(400, {'detail': 'scope must be one of ...'}))
+    with pytest.raises(requests.HTTPError):
+        client.get_facet_recurring_genes('braak', scope='mouse_in_vivo')
+
+
+def test_gene_facet_effects_keeps_exclude_secondary_with_scope(http, client):
+    http.queue(make_response(200, {'gene': 'TREM2', 'facets': {},
+                                   'by_scope': {}}))
+    client.get_gene_facet_effects('TREM2', exclude_secondary=False,
+                                  scope='human_postmortem')
+    assert http.last['params'] == {'exclude_secondary': 'false',
+                                   'scope': 'human_postmortem'}
+
+
+def test_replication_entry_v3_fields_pass_through(http, client):
+    entry = {'r_value': 0.001, 'replicated': True,
+             'effect_gate_passed': False, 'effect_gate_cohorts': ['A'],
+             'n_cohorts_ge_tau': 1, 'r_treat': 0.4,
+             'replicated_effect': False, 'r_strong': None,
+             'replicated_strong': None, 'n_small': 1, 'k_treat': 0}
+    http.queue(make_response(200, {
+        'scope': 'human_postmortem', 'scopes': ['human_postmortem'],
+        'gene_flags': ['sex_chromosome'], 'units': [
+            {'db_id': 'A/B', 'analysis_level': 'below_floor',
+             'lambda_gc': 1.4, 'inflated': True,
+             'covariates_dropped': ['pmi']}],
+        'replication': [entry]}))
+    result = client.get_facet_gene_effects('age', 'XIST')
+    assert result['replication'][0] == entry
+    assert result['units'][0]['analysis_level'] == 'below_floor'
+    assert result['gene_flags'] == ['sex_chromosome']
+
+
+def test_recurring_genes_dataframe_keeps_all_family_counts(http, client):
+    pytest.importorskip('pandas')
+    body = {'n_replicated': 3, 'n_genes_in_family': 100,
+            'n_r_significant': 9, 'n_effect_gate': 5,
+            'n_replicated_effect': 2,
+            'rows': [{'gene': 'A', 'r_value': 0.01}]}
+    http.queue(make_response(200, body))
+    frame = client.get_facet_recurring_genes('braak', format='dataframe')
+    assert frame.attrs == {key: value for key, value in body.items()
+                           if key != 'rows'}
+
+
+def test_databases_facet_fields(http, client):
+    pytest.importorskip('pandas')
+    rows = [{'id': 'X/Y', 'facet_scope': 'xenograft_human_in_mouse',
+             'control_basis': 'wt_host'},
+            {'id': 'M/N', 'facet_scope': None, 'control_basis': None}]
+    http.queue(make_response(200, {'databases': rows}))
+    frame = client.get_databases(format='dataframe')
+    assert frame.loc[0, 'facet_scope'] == 'xenograft_human_in_mouse'
+    assert frame['facet_scope'].isna().tolist() == [False, True]
+    assert frame.loc[0, 'control_basis'] == 'wt_host'
+
+
+@pytest.mark.parametrize('name', ['get_databases', 'get_database_info'])
+def test_dataset_facet_field_docs(name):
+    doc = getattr(AnthiveClient, name).__doc__
+    for field in ('facet_scope', 'control_basis', 'replicate_basis'):
+        assert field in doc
+    assert 'facet_exclude' in AnthiveClient.get_databases.__doc__
+
+
+def test_facet_docstrings_name_new_facets():
+    doc = AnthiveClient.get_facet.__doc__
+    for name in ('ant_age', 'ant_app_nlgf', 'ant_host_genotype',
+                 'tissue_uberon', 'ant_mg_author_cluster'):
+        assert name in doc
+    tests_doc = AnthiveClient.get_facet_tests.__doc__
+    for name in ('persists_after_pathology_adjustment', 'below_floor',
+                 'lambda_gc', 'covariates_dropped', 'age_adjusted'):
+        assert name in tests_doc

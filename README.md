@@ -258,6 +258,12 @@ discovery automatically (no filesystem in the browser).
   columns with `format='dataframe'`).
 * The APOE facet is `apoe4_carrier` (column `ant_apoe4_carrier`); the
   server accepts `apoe_carrier` as a deprecated alias for one release.
+  `AnthiveClient.TESTED_FACETS` lists the nine facets with donor-level
+  results, `FACET_SCOPES` the facet scopes, `DEPRECATED_FACETS` the
+  deprecated facets and what replaces them.
+* Facet scopes (API 2.44.0): `get_facet`, the facet test views and
+  `get_module_variability` take `scope=` (`human_postmortem`,
+  `xenograft_human_in_mouse`, `in_vitro`). Human and mouse never mix.
 * Donor-level facet tests (exploratory): `get_facet_tests`,
   `get_facet_test_genes`, `get_facet_test_modules`,
   `get_facet_test_volcano`, `get_facet_tests_across_datasets`,
@@ -392,8 +398,12 @@ whole run at once, since no later paper could succeed either.
 The server serves the output of anthive's donor-level facet tests: for
 each dataset and cell type, raw counts are summed per donor and genes
 are tested with limma-voom against sex (m vs f), disease (AD vs
-control), APOE e4 carrier status and Braak stage (trend per stage),
-with module scores tested by OLS plus label permutations.
+control), APOE e4 carrier status and dose, Braak stage (trend per
+stage, and early versus late), age (per decade, with and without the
+pathology term in the model) and, in xenograft hosts, App-NL-G-F
+versus control, with module scores tested by OLS plus label
+permutations. Everything is counted per facet scope: human post-mortem
+and xenograft results are never combined (`scope=`).
 
 Read these results with their limits in mind. They are **exploratory**.
 The unit of analysis is the **donor**, so n is the number of donors, not
@@ -437,6 +447,12 @@ for row in top["rows"]:
     print(row["gene"], row["cohorts_sig_same_sign"], "of",
           row["cohorts_tested"], row["agreement"], row["direction"])
 
+# Facet scopes: one answer per scope; without scope, by_scope has all.
+cards = client.get_gene_facet_effects("TREM2")
+print(cards["strongest_facet"], list(cards["by_scope"]))
+xeno = client.get_facet_recurring_genes(
+    "app_nlgf", scope="xenograft_human_in_mouse")
+
 # Which datasets share donors, and the DRAFT cohort table.
 groups = client.get_donor_groups()
 cohorts = client.get_facet_cohorts()
@@ -444,8 +460,9 @@ cohorts = client.get_facet_cohorts()
 
 How to read the fields:
 
-* `descriptive_only`: a level has fewer than 5 donors (Braak: fewer than
-  10). p, q, t and the CI are null; only the effect estimate is given.
+* `descriptive_only`: the unit has no usable p values (cell-level or
+  below the replicate floor). p, q, t and the CI are null; only the
+  effect estimate is given.
 * `counted`: the unit counts towards replication. `not_counted_reason`
   says why not (secondary dataset, descriptive only, dataset not in the
   cohort table, cohort role not counted, unmapped cell type, or another
@@ -453,11 +470,23 @@ How to read the fields:
   type source).
 * `replicated` is a partial-conjunction call: `r_value < 0.05` means the
   effect is present in at least 2 independent cohorts, same direction
-  (Benjamini and Heller; Simes combination of the limma treat p values
-  of one anchor unit per cohort). `k` of `m` is descriptive (cohorts
-  individually at `q_treat < 0.05`). `get_facet_recurring_genes` lists
-  replicated genes only (`n_replicated`, `n_genes_in_family`). Units
-  with `analysis_level` `cell` are cell-level and descriptive only.
+  (Benjamini and Heller; Simes combination of the one-sided limma p
+  values of one anchor unit per cohort). It says the direction
+  reproduces, not that the effect is large. `effect_gate_passed` adds
+  the size (at least 2 cohorts with a log2 fold change of at least
+  `effect_gate_tau`, a 10 percent change); `replicated_effect` is the
+  stricter tier (`r_treat < 0.05`, tested against that minimum effect;
+  `replicated_strong` does the same at 25 percent). `k` of `m` is
+  descriptive (cohorts individually at `q_value < 0.05` in the
+  replicated direction; `k_treat` uses the treat q value).
+* Small cohorts (a level with fewer than 5 replicates, numeric facets
+  fewer than 10) are tested and counted but flagged `small_sample`;
+  `n_small` counts them in a replication entry. Units with
+  `analysis_level` `below_floor` (fewer than 4 replicates) or `cell`
+  are descriptive only. `lambda_gc` above 1.3 (`inflated`) means the
+  p values of that unit are too small. `get_facet_recurring_genes` lists
+  replicated genes that pass the effect gate (`n_replicated`,
+  `n_effect_gate`, `n_replicated_effect`, `n_genes_in_family`).
   A cohort is a row group of the DRAFT cohort table and counts
   once. Cell type labels are counted by group (`microglial cell`,
   `Microglia` and `Mic P2RY12` are all `microglia`, with `cl_id`

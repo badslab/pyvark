@@ -193,3 +193,90 @@ def test_module_score_listing(client):
         assert isinstance(items['scored_genesets'], list)
         return
     pytest.skip('no databases available')
+
+
+# ── API 2.44.0: facet scopes and replication tiers (read-only) ──────────────
+
+
+def _needs_2_44(client):
+    version = client._get('/').get('version', '0')
+    if tuple(int(part) for part in version.split('.')[:2]) < (2, 44):
+        pytest.skip(f'server {version} predates API 2.44.0')
+
+
+def test_api_target_matches_server_major_minor(client):
+    _needs_2_44(client)
+    assert client._get('/')['version'].startswith('2.44')
+    assert AnthiveClient.API_TARGET.startswith('2.44')
+
+
+def test_dataset_rows_carry_facet_scope(client):
+    _needs_2_44(client)
+    rows = client.get_databases()
+    scopes = {row.get('facet_scope') for row in rows}
+    assert scopes <= set(AnthiveClient.FACET_SCOPES) | {None}
+    for field in ('replicate_unit', 'disease_basis', 'control_basis'):
+        assert field in rows[0]
+
+
+def test_facet_gene_effects_by_scope(client):
+    _needs_2_44(client)
+    card = client.get_facet_gene_effects('braak', 'TREM2',
+                                         cell_type='microglia')
+    assert card['scope'] == 'human_postmortem'
+    entry = card['replication'][0]
+    for field in ('r_value', 'replicated', 'effect_gate_passed', 'r_treat',
+                  'replicated_effect', 'n_small', 'k_treat'):
+        assert field in entry
+    assert entry['replicated'] == (entry['r_value'] < 0.05)
+    xenograft = client.get_facet_gene_effects(
+        'app_nlgf', 'TREM2', scope='xenograft_human_in_mouse')
+    assert xenograft['scope'] == 'xenograft_human_in_mouse'
+
+
+def test_gene_facet_effects_has_by_scope_and_all_tested_facets(client):
+    _needs_2_44(client)
+    original_timeout = client.timeout
+    client.timeout = 600  # cold server: reads every facet result file
+    try:
+        result = client.get_gene_facet_effects('TREM2')
+    finally:
+        client.timeout = original_timeout
+    assert set(result['facets']) == set(AnthiveClient.TESTED_FACETS)
+    assert set(result['by_scope']) <= set(AnthiveClient.FACET_SCOPES)
+    assert 'strongest_facet' in result
+
+
+def test_recurring_genes_counts_and_gate(client):
+    _needs_2_44(client)
+    result = client.get_facet_recurring_genes('braak', n=5)
+    assert result['n_replicated'] >= result['n_effect_gate'] >= 0
+    for row in result['rows']:
+        assert row['replicated'] and row['effect_gate_passed']
+
+
+def test_retired_scope_is_a_400(client):
+    import requests
+    _needs_2_44(client)
+    with pytest.raises(requests.HTTPError) as excinfo:
+        client.get_facet_gene_effects('braak', 'TREM2',
+                                      scope='mouse_in_vivo')
+    assert excinfo.value.response.status_code == 400
+
+
+def test_facet_detail_and_tests_with_scope(client):
+    _needs_2_44(client)
+    detail = client.get_facet('ant_age', scope='human_postmortem')
+    assert detail['scope'] == 'human_postmortem'
+    tests = client.get_facet_tests_across_datasets(
+        'age', top_genes=0, scope='all')
+    assert tests['rows']
+    assert {row['facet_scope'] for row in tests['rows']} <= set(
+        AnthiveClient.FACET_SCOPES)
+
+
+def test_module_variability_scope(client):
+    _needs_2_44(client)
+    result = client.get_module_variability(
+        scope='xenograft_human_in_mouse', limit=5)
+    assert result['rows'] is not None

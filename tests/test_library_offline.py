@@ -628,3 +628,21 @@ def test_env_user_without_password_is_ignored(monkeypatch):
     monkeypatch.delenv('ANTHIVE_PASSWORD', raising=False)
     client = AnthiveClient(BASE, vark_config=False)
     assert client.auth is None
+
+
+def test_get_library_status_non_admin_shape(http, client):
+    body = {'papers': 3, 'linked_datasets': 2, 'index': {'model': 'm'},
+            'issues': {'errors': [], 'warnings': []},
+            'n_errors': 1, 'n_warnings': 4}
+    http.queue(make_response(200, body))
+    status = client.get_library_status()
+    assert 'unresolved_references' not in status
+    assert 'library_dir' not in status
+    assert (status['n_errors'], status['n_warnings']) == (1, 4)
+
+
+def test_get_library_status_docstring_names_admin_fields():
+    doc = AnthiveClient.get_library_status.__doc__
+    for name in ('n_errors', 'n_warnings', 'unresolved_references',
+                 'library_dir', 'index.path'):
+        assert name in doc

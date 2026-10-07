@@ -3,7 +3,68 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
-## 0.9.0 (2026-10-05)
+## 0.9.0 (2026-10-07)
+
+0.9.0 was prepared for API 2.43.0 but never uploaded (PyPI has 0.7.0 as
+the latest release, and 0.8.0 was never uploaded either), so the API
+2.44.0 work is folded into 0.9.0. Targets anthive REST API 2.44.0
+(`API_TARGET`; anthive4's `doc/API_CHANGELOG.md`, "2.44.0"). Responses
+are passed through unchanged, so most of this is documentation; the code
+changes are the `scope` argument and a few class constants.
+
+### Added (API 2.44.0)
+
+- `scope` argument on `get_facet`, `get_facet_tests_across_datasets`,
+  `get_facet_gene_effects`, `get_facet_recurring_genes`,
+  `get_gene_facet_effects` and `get_module_variability`. Facets are
+  tested, counted and replicated per facet scope (`human_postmortem`,
+  `xenograft_human_in_mouse`, `in_vitro`); human and mouse never mix.
+  Sent only when given. Responses carry `scope` and `scopes`;
+  `get_gene_facet_effects()` without `scope` adds `by_scope`. The
+  retired scope `mouse_in_vivo` gives HTTP 400.
+  `AnthiveClient.FACET_SCOPES` and `DEFAULT_FACET_SCOPE` list them.
+- `TESTED_FACETS` is now the server's nine facets: `sex`, `disease`,
+  `apoe4_carrier`, `apoe4_dose`, `braak`, `braak_threshold`, `age`,
+  `age_adjusted` and `app_nlgf` (xenograft hosts only).
+- `DEPRECATED_FACETS` maps deprecated facets (`region`,
+  `author_cluster`, `lesion`, ...) to their replacements;
+  `DEPRECATED_FACET_ALIASES` is unchanged (`apoe_carrier`).
+- Replication fields documented: `effect_gate_passed`,
+  `effect_gate_cohorts`, `n_cohorts_ge_tau`, `effect_gate_tau`,
+  `effect_gate_unit`, `median_logFC`, `r_cohorts`, `r_significant`,
+  `r_treat`, `replicated_effect`, `r_strong`, `replicated_strong`,
+  `k_treat`, `replication_p`, `n_small`, `small_cohort_replicates`;
+  `analysis_level` `below_floor`; unit quality fields `lambda_gc`,
+  `inflated`, `df_total_median`, `covariates_dropped`,
+  `n_sex_checked`, `n_sex_discordant`, `age_top_coded`,
+  `design_subset`, `notes`, `small_sample`; gene class flags
+  (`gene_flags`); `persists_after_pathology_adjustment` on age rows;
+  `strongest_facet`; `n_r_significant`, `n_effect_gate` and
+  `n_replicated_effect` on the recurring-genes response (kept in
+  `df.attrs` with `format='dataframe'`).
+- Facets documented: `ant_age` and its pathology-adjusted twin,
+  `ant_app_nlgf`, `ant_host_genotype`, the per-cell-type author cluster
+  facets (`ant_mg_author_cluster`, ..., dataset-scoped, no gene tests),
+  the `ant_tissue` umbrella with the plain column `tissue_uberon`.
+- Dataset fields `facet_scope` and `control_basis` on `get_databases()`
+  and `get_database_info()`; `facet_exclude` / `facet_exclude_reason`
+  (dataset `.md` fields, not served by `/databases`) explained.
+
+### Changed (API 2.44.0)
+
+- `get_library_status()` docstring: non-admins no longer get
+  `unresolved_references`, issue texts, `library_dir` or `index.path`
+  (issue lists are empty); `n_errors` and `n_warnings` are new.
+
+- Replication semantics changed on the server (field names did not):
+  `r_value` and `p_pc` use the ordinary one-sided limma p value, `k`
+  counts cohorts at `q_value < 0.05`, `replicated` is `r_value < 0.05`
+  (the direction reproduces; the size is judged by `effect_gate_passed`
+  and `replicated_effect`). Small cohorts are tested and counted
+  (`small_sample`) instead of `descriptive_only`; datasets need 4
+  replicates. `FACET_TESTS_CAVEATS` and the docstrings say so.
+
+## 0.9.0 earlier work (prepared for API 2.43.0, 2026-10-05)
 
 Targets anthive REST API 2.43.0 (`API_TARGET`; anthive4's
 `doc/API_CHANGELOG.md`, 2026-10-05). Docstrings that said "anthive main
