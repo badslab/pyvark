@@ -57,6 +57,16 @@ changes are the `scope` argument and a few class constants.
   tool). `help_topics` in facet, facet-test and dataset-context
   responses passes through and is named in the docstrings.
 
+- `get_gene_facet_effects()` takes `facet=` (a facet or a list, sent as a
+  comma separated list) and `include_units=` (`False` empties `units` in
+  every card, about 0.5 MB instead of 5 MB for a gene such as PTPRG).
+  Recurring-genes rows add `r_strong`, `replicated_strong` (25 percent
+  tier) and, for `age`, `persists_after_pathology_adjustment`; the
+  response adds `n_replicated_strong` (also in `df.attrs`). Gene card
+  units add `replicate_unit` and `replicate_column`. `facet_exclude`
+  and `facet_exclude_reason` are served on `get_databases()`,
+  `get_database_info()` and `get_facet_tests()`.
+
 ### Changed (API 2.44.0)
 
 - The integration test of the recurring-genes ranking checks the

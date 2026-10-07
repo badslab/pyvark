@@ -309,3 +309,42 @@ def test_facet_tests_carry_help_topics(client):
     assert 'facet-effects' in result['help_topics']
     for topic_id in result['help_topics']:
         assert client.get_help_topic(topic_id)['body']
+
+
+# ── late 2.44.0: card trimming, strong tier, exclusion fields ───────────────
+
+
+def test_gene_cards_trimmed_live(client):
+    _needs_2_44(client)
+    original_timeout = client.timeout
+    client.timeout = 600
+    try:
+        result = client.get_gene_facet_effects(
+            'TREM2', facet=['braak', 'age'], include_units=False)
+    finally:
+        client.timeout = original_timeout
+    assert set(result['facets']) == {'braak', 'age'}
+    for card in result['facets'].values():
+        assert card['units'] == []
+        assert 'n_units' in card and 'replication' in card
+
+
+def test_age_top_rows_and_strong_tier_live(client):
+    _needs_2_44(client)
+    result = client.get_facet_recurring_genes('age', n=3)
+    assert 'n_replicated_strong' in result
+    for row in result['rows']:
+        assert 'r_strong' in row and 'replicated_strong' in row
+        assert 'persists_after_pathology_adjustment' in row
+
+
+def test_facet_exclude_live(client):
+    _needs_2_44(client)
+    rows = client.get_databases()
+    assert all('facet_exclude' in row for row in rows)
+    excluded = [row for row in rows if row['facet_exclude']]
+    assert all(row['facet_exclude_reason'] for row in excluded)
+    if excluded:
+        summary = client.get_facet_tests(excluded[0]['id'])
+        assert summary['status'] == 'not_tested'
+        assert summary['facet_exclude'] is True

@@ -683,3 +683,69 @@ def test_help_topics_pass_through(http, client):
                                    'help_topics': ['facet-effects']}))
     assert client.get_gene_facet_effects('A')['help_topics'] == [
         'facet-effects']
+
+
+# ── gene card trimming and late 2.44.0 fields ───────────────────────────
+
+
+@pytest.mark.parametrize('facet,expected', [
+    ('age', 'age'), (['age', 'braak'], 'age,braak'), (('sex',), 'sex')])
+def test_gene_facet_effects_facet_param(http, client, facet, expected):
+    http.queue(make_response(200, {'gene': 'A', 'facets': {}}))
+    client.get_gene_facet_effects('A', facet=facet)
+    assert http.last['params'] == {'facet': expected}
+
+
+def test_gene_facet_effects_include_units_false(http, client):
+    http.queue(make_response(200, {'gene': 'A', 'facets': {
+        'sex': {'n_units': 3, 'units': [], 'replication': []}}}))
+    result = client.get_gene_facet_effects(
+        'A', include_units=False, scope='human_postmortem',
+        exclude_secondary=False, facet='sex')
+    assert http.last['params'] == {
+        'exclude_secondary': 'false', 'scope': 'human_postmortem',
+        'facet': 'sex', 'include_units': 'false'}
+    assert result['facets']['sex']['n_units'] == 3
+
+
+def test_gene_facet_effects_defaults_send_nothing(http, client):
+    http.queue(make_response(200, {'gene': 'A', 'facets': {}}))
+    client.get_gene_facet_effects('A')
+    assert not http.last['params']
+
+
+def test_gene_facet_effects_docstring_names_trimming():
+    doc = AnthiveClient.get_gene_facet_effects.__doc__
+    for word in ('include_units', 'facet', 'replicate_unit',
+                 'replicate_column', 'empty'):
+        assert word in doc
+
+
+def test_recurring_genes_strong_tier(http, client):
+    pytest.importorskip('pandas')
+    body = {'n_replicated': 2, 'n_replicated_strong': 1, 'rows': [
+        {'gene': 'A', 'r_strong': 0.01, 'replicated_strong': True,
+         'persists_after_pathology_adjustment': True}]}
+    http.queue(make_response(200, body))
+    assert client.get_facet_recurring_genes('age')['rows'][0][
+        'persists_after_pathology_adjustment'] is True
+    http.queue(make_response(200, body))
+    frame = client.get_facet_recurring_genes('age', format='dataframe')
+    assert frame.attrs == {'n_replicated': 2, 'n_replicated_strong': 1}
+    doc = AnthiveClient.get_facet_recurring_genes.__doc__
+    for word in ('r_strong', 'replicated_strong', 'n_replicated_strong',
+                 'persists_after_pathology_adjustment'):
+        assert word in doc
+
+
+def test_facet_exclude_fields(http, client):
+    pytest.importorskip('pandas')
+    rows = [{'id': 'S/P', 'facet_exclude': True,
+             'facet_exclude_reason': 'spatial'},
+            {'id': 'A/B', 'facet_exclude': False,
+             'facet_exclude_reason': None}]
+    http.queue(make_response(200, {'databases': rows}))
+    frame = client.get_databases(format='dataframe')
+    assert frame['facet_exclude'].tolist() == [True, False]
+    for name in ('get_databases', 'get_database_info', 'get_facet_tests'):
+        assert 'facet_exclude_reason' in getattr(AnthiveClient, name).__doc__
