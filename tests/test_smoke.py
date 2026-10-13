@@ -206,8 +206,8 @@ def _needs_2_44(client):
 
 def test_api_target_matches_server_major_minor(client):
     _needs_2_44(client)
-    assert client._get('/')['version'].startswith('2.44')
-    assert AnthiveClient.API_TARGET.startswith('2.44')
+    server = client._get('/')['version'].split('.')[:2]
+    assert AnthiveClient.API_TARGET.split('.')[:2] == server
 
 
 def test_dataset_rows_carry_facet_scope(client):
@@ -249,7 +249,8 @@ def test_gene_facet_effects_has_by_scope_and_all_tested_facets(client):
 
 def test_recurring_genes_counts_and_gate(client):
     _needs_2_44(client)
-    result = client.get_facet_recurring_genes('braak', n=5)
+    result = client.get_facet_recurring_genes('braak', n=5,
+                                              effect_gate=True)
     assert result['n_replicated'] >= result['n_effect_gate'] >= 0
     for row in result['rows']:
         assert row['replicated'] and row['effect_gate_passed']
@@ -348,3 +349,134 @@ def test_facet_exclude_live(client):
         summary = client.get_facet_tests(excluded[0]['id'])
         assert summary['status'] == 'not_tested'
         assert summary['facet_exclude'] is True
+
+
+# ── API 2.45.0: forest, paging, modules, donors, ranks (read-only) ─────────
+
+
+def _needs_2_45(client):
+    version = client._get('/').get('version', '0')
+    if tuple(int(part) for part in version.split('.')[:2]) < (2, 45):
+        pytest.skip(f'server {version} predates API 2.45.0')
+
+
+def test_version_advertises_compatible_pyvark(client):
+    _needs_2_45(client)
+    assert 'compatible_pyvark' in client.get_version()
+
+
+def test_forest_rows_live(client):
+    _needs_2_45(client)
+    card = client.get_facet_gene_effects('sex', 'XIST',
+                                         cell_type='microglia',
+                                         forest='anchors')
+    entry = card['replication'][0]
+    for field in ('call', 'nt_label', 'k_over_m', 'cohorts_label', 'forest',
+                  'links'):
+        assert field in entry
+    assert entry['forest'] and 'anchor' in entry['forest'][0]
+
+
+def test_top_genes_paging_live(client):
+    _needs_2_45(client)
+    first = client.get_facet_top_genes('sex', n=2)
+    assert first['n_returned'] == len(first['rows']) <= 2
+    assert 'headline' in first and 'n_matching' in first
+    every = client.get_facet_top_genes('sex', n=20, fetch_all=True)
+    assert len(every['rows']) == first['n_matching']
+    assert every['has_more'] is False
+    genes = [row['gene'] for row in every['rows']]
+    assert genes[:2] == [row['gene'] for row in first['rows']]
+    assert len(set(genes)) == len(genes)
+
+
+def test_top_modules_and_overview_live(client):
+    _needs_2_45(client)
+    modules = client.get_facet_top_modules('sex', n=2)
+    assert 'effect_gate_rule' in modules and 'effect_gate' not in modules
+    overview = client.get_facet_effects_overview('sex', n=2)
+    assert 'headline' in overview and 'cell_types' in overview
+    if modules['rows']:
+        study, experiment, name = modules['rows'][0]['geneset_id'].split('/', 2)
+        card = client.get_geneset_facet_effects(study, experiment, name,
+                                                facet='sex')
+        assert 'sex' in card['facets']
+        assert 'effect_gate_rule' in card
+
+
+def test_gene_detection_live(client):
+    _needs_2_45(client)
+    result = client.get_gene_detection('TREM2')
+    assert result['gene'] == 'TREM2' and 'summary' in result
+
+
+def test_donor_values_and_plot_live(client):
+    _needs_2_45(client)
+    values = client.get_facet_donor_values('sex', 'microglia', gene='XIST')
+    assert values['units']
+    unit = next(unit for unit in values['units'] if unit['available'])
+    assert unit['donors'][0]['label'].startswith('D')
+    single = client.get_facet_donor_values('sex', 'microglia', gene='XIST',
+                                           db_id=unit['db_id'])
+    assert {each['db_id'] for each in single['units']} == {unit['db_id']}
+    plot = client.get_facet_donor_plot('sex', 'microglia', gene='XIST',
+                                       fmt='svg')
+    assert plot['mime'].startswith('image/svg')
+    assert plot['caption']
+
+
+def test_donor_variability_live(client):
+    _needs_2_45(client)
+    top = client.get_donor_variability_top(limit=3)
+    assert 'celltype_group' in top and 'cell_type_group' not in top
+    if top['rows']:
+        gene = top['rows'][0]['gene']
+        card = client.get_gene_donor_variability(gene)
+        assert card['feature'] == gene and card['units']
+    if top['cohorts']:
+        db_id = top['cohorts'][0]['db_id']
+        summary = client.get_database_donor_variability(db_id)
+        assert summary['status'] == 'analysed'
+        rows = client.get_database_donor_variability(
+            db_id, 'gene', 'microglia', limit=3)
+        assert len(rows['rows']) <= 3
+
+
+def test_module_ranks_live(client):
+    _needs_2_45(client)
+    for db in client.get_databases():
+        ranks = client.get_module_ranks(db['id'])
+        if ranks['available'] and ranks['modules']:
+            break
+    else:
+        pytest.skip('no dataset with per-cell module scores')
+    module = ranks['modules'][0]
+    rank = client.get_geneset_rank(module['study'], module['experiment'],
+                                   module['name'], db_id=db['id'])
+    assert rank['datasets'][0]['db_id'] == db['id']
+
+
+def test_de_study_summary_live(client, db_with_de):
+    _needs_2_45(client)
+    db_id, study = db_with_de
+    study_id = study.get('study_id') or study.get('id')
+    summary = client.get_de_study_summary(db_id, study_id)
+    assert 'contrasts' in summary and summary['padj_max'] == 0.05
+
+
+def test_unknown_dataset_is_one_404_live(client):
+    import requests
+    _needs_2_45(client)
+    with pytest.raises(requests.HTTPError) as excinfo:
+        client.get_module_ranks('NO/SUCH')
+    assert excinfo.value.response.status_code == 404
+    assert excinfo.value.response.json()['detail'] == (
+        "Database 'NO/SUCH' not found")
+
+
+def test_apoe_carrier_alias_is_gone_live(client):
+    import requests
+    _needs_2_45(client)
+    with pytest.raises(requests.HTTPError) as excinfo:
+        client.get_facet_recurring_genes('apoe_carrier', n=1)
+    assert excinfo.value.response.status_code in (400, 404)

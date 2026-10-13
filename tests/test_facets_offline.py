@@ -45,8 +45,9 @@ def test_new_methods_exist():
 
 def test_tested_facets_and_caveats():
     assert AnthiveClient.TESTED_FACETS == (
-        'sex', 'disease', 'apoe4_carrier', 'apoe4_dose', 'braak',
-        'braak_threshold', 'age', 'age_adjusted', 'app_nlgf')
+        'sex', 'graft_sex', 'host_sex', 'disease', 'apoe4_carrier',
+        'apoe4_dose', 'braak', 'braak_threshold', 'age', 'age_adjusted',
+        'app_nlgf')
     caveats = AnthiveClient.FACET_TESTS_CAVEATS.lower()
     for phrase in ('exploratory', 'replicate', 'provisional', 'small_sample',
                    'below_floor', 'not_counted_reason', 'r_value < 0.05',
@@ -385,7 +386,9 @@ def test_get_facet_cohorts_dataframe(http, client):
 
 def test_apoe4_rename_and_alias_map():
     assert 'apoe_carrier' not in AnthiveClient.TESTED_FACETS
-    assert AnthiveClient.DEPRECATED_FACET_ALIASES == {
+    # API 2.45.0 removed the alias: it moved to REMOVED_FACET_ALIASES.
+    assert AnthiveClient.DEPRECATED_FACET_ALIASES == {}
+    assert AnthiveClient.REMOVED_FACET_ALIASES == {
         'apoe_carrier': 'apoe4_carrier',
         'ant_apoe_carrier': 'ant_apoe4_carrier'}
 
@@ -463,7 +466,7 @@ SCOPE_METHODS = [
 
 
 def test_api_target_and_constants():
-    assert AnthiveClient.API_TARGET == '2.44.0'
+    assert AnthiveClient.API_TARGET == '2.45.0'
     assert AnthiveClient.FACET_SCOPES == (
         'human_postmortem', 'xenograft_human_in_mouse', 'in_vitro')
     assert AnthiveClient.DEFAULT_FACET_SCOPE == 'human_postmortem'
