@@ -3,6 +3,106 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.10.0 (2026-10-13, unreleased)
+
+Targets anthive REST API 2.45.0 (`API_TARGET`; anthive4's
+`doc/API_CHANGELOG.md`, "2.45.0"). Every new 2.45.0 route has a method;
+responses are passed through unchanged.
+
+### Added (API 2.45.0)
+
+- `get_facet_top_modules(facet, ...)`: `/facets/{facet}/modules/top`,
+  gene sets ranked by module replication (`offset`, `effect_gate`,
+  `include_not_replicated`, `catalog`, `scope`, `fetch_all`,
+  `format='dataframe'`).
+- `get_facet_effects_overview(facet, n=10, ...)`:
+  `/facets/{facet}/effects/overview`, the facet view in one call.
+- `get_geneset_facet_effects(study, experiment, name, ...)`:
+  `/genesets/{s}/{e}/{n}/facet-effects`, module replication per facet
+  next to the member genes (`facet`, `scope`, `cell_type`,
+  `include_units`, `forest`).
+- `get_gene_detection(gene)`: `/genes/{gene}/detection`, the data of
+  the low-detection pill.
+- `get_facet_donor_values(facet, cell_type, gene=|module=, ...)` and
+  `get_facet_donor_plot(...)`: `/facets/{facet}/donor-values` and
+  `/facets/{facet}/donor-plot.{png|svg|pdf}`, including the `db_id`
+  filter. The plot method returns `{bytes, format, caption, mime,
+  path}`; the per-cohort effects are only in `caption`. Exactly one of
+  `gene` and `module` is checked before the request (`ValueError`).
+- Donor variability (exploratory): `get_database_donor_variability`,
+  `get_gene_donor_variability`, `get_geneset_donor_variability`,
+  `get_donor_variability_top`.
+- `get_geneset_rank(study, experiment, name, db_id=None)` and
+  `get_module_ranks(db_id)` (`/databases/{id}/module-ranks`): the rank
+  of a gene set's mean score among the gene sets of one dataset, with
+  `std`.
+- `get_de_study_summary(db_id, study_id, padj_max=None)`:
+  `/databases/{id}/de/{study}/summary`.
+- `forest=` (`full`, `anchors`, `none`; validated against
+  `FOREST_DETAIL`) on `get_facet_gene_effects` and
+  `get_gene_facet_effects`.
+- `get_facet_recurring_genes`: `offset`, `effect_gate`, `strict` and
+  `fetch_all` (follows `has_more` and joins the pages); `n_matching`,
+  `has_more` and `headline` go to `df.attrs`. `get_facet_top_genes` is
+  the same method under the MCP tool's name.
+- Constants `FOREST_DETAIL`, `DONOR_PLOT_FORMATS`,
+  `DONOR_VARIABILITY_RUNGS`, `REMOVED_FACET_ALIASES`.
+
+### Changed (API 2.45.0)
+
+- `TESTED_FACETS` adds `graft_sex` and `host_sex` (xenografts); `sex` is
+  human post-mortem only on the server.
+- `DEPRECATED_FACET_ALIASES` is empty: the server no longer accepts
+  `apoe_carrier` / `ant_apoe_carrier`. The old map moved to
+  `REMOVED_FACET_ALIASES`.
+- `get_facet_recurring_genes` docstring: `n` goes up to 100000 (was
+  "1 to 500"); rows are the replicated genes and the gate is a filter
+  (`effect_gate=True`), not a precondition; k counts cohorts at
+  `q_value < 0.05` (not `q_treat`); new response fields listed.
+- `get_facet_gene_effects` docstring: forest rows, `call`, `nt_label`,
+  `gate`, `strict`, `k_over_m`, `cohorts_label`, `detection`,
+  `low_detection`, `links`, unit `modality`.
+- `get_facet_tests` docstring: `genes.n_up` / `n_down` and `n_q05`,
+  `n_up`, `n_down` per `modules` entry.
+- `get_version` docstring: `compatible_pyvark`; the fallback shape has
+  the key.
+- Renamed response fields are documented under their new names:
+  `effect_gate_rule` (module routes; the boolean `effect_gate` query
+  parameter keeps its name) and `celltype_group` on
+  `/donor-variability/top`.
+
+### Security and access (API 2.45.0)
+
+- Class docstring: datasets that are not `access: public` are hidden
+  from callers without an identity (missing from listings, the one
+  `404 Database '<id>' not found` by id); the server ignores
+  `X-Remote-User` / `X-Remote-Groups`.
+- `rescan_databases`, `rescan_genesets`, `rescan_module_variability`,
+  `rescan_catalogs`, `get_plot_cache_stats`, `clear_plot_cache`,
+  `admin_release` and `admin_restore` are documented as admin only
+  (403 for other signed-in users).
+
+### Tests
+
+- `tests/test_api245_offline.py` (mocked HTTP) covers every new method,
+  the paging helper, argument validation and the docstrings.
+- `tests/test_smoke.py` gains a 2.45.0 section (forest rows, paging,
+  modules, overview, gene set card, detection, donor values and plot,
+  donor variability, ranks, DE summary, the unified 404, the removed
+  alias). The 2.44 checks now compare `API_TARGET` with the server's
+  major.minor and ask for `effect_gate=True` where they assert the gate.
+
+### Not covered
+
+- Server routes outside the 2.45.0 changes that pyvark has never
+  wrapped stay unwrapped: the gene statistics and variance cache admin
+  routes, `/admin/api-config`, `/admin/refresh-views`, `/admin/mcp-links`,
+  `/me/mcp*`, `/chat*`, `/databases/{id}/curation`, `/pseudobulk`,
+  `/source`, `/source.mus`, `/collections/{group}/source` (admin UI
+  only) and the notebook routes.
+- The relative URLs in a replication entry's `links` are returned as
+  given; join them with `base_url` to fetch them.
+
 ## 0.9.0 (2026-10-07)
 
 0.9.0 was prepared for API 2.43.0 but never uploaded (PyPI has 0.7.0 as

@@ -256,10 +256,12 @@ discovery automatically (no filesystem in the browser).
 * `get_databases` rows and `get_database_info` carry `replicate_unit`,
   `replicate_column`, `replicate_basis` and `disease_basis` (DataFrame
   columns with `format='dataframe'`).
-* The APOE facet is `apoe4_carrier` (column `ant_apoe4_carrier`); the
-  server accepts `apoe_carrier` as a deprecated alias for one release.
-  `AnthiveClient.TESTED_FACETS` lists the nine facets with donor-level
-  results, `FACET_SCOPES` the facet scopes, `DEPRECATED_FACETS` the
+* The APOE facet is `apoe4_carrier` (column `ant_apoe4_carrier`); API
+  2.45.0 removed the `apoe_carrier` alias (an unknown facet now;
+  `REMOVED_FACET_ALIASES` maps old names). `AnthiveClient.TESTED_FACETS`
+  lists the eleven facets with donor-level results (2.45.0 added
+  `graft_sex` and `host_sex` for xenografts; `sex` is human post-mortem
+  only), `FACET_SCOPES` the facet scopes, `DEPRECATED_FACETS` the
   deprecated facets and what replaces them.
 * Plain-language help (API 2.44.0): `explain("replication")` returns
   the maintainers' text as markdown; `get_help`, `get_help_topic`,
@@ -273,6 +275,29 @@ discovery automatically (no filesystem in the browser).
   `get_facet_test_volcano`, `get_facet_tests_across_datasets`,
   `get_facet_gene_effects`, `get_facet_recurring_genes`,
   `get_gene_facet_effects`, `get_facet_cohorts`. See below.
+* API 2.45.0 facet views: `forest=` (`full`, `anchors`, `none`) on
+  `get_facet_gene_effects` and `get_gene_facet_effects`;
+  `get_facet_recurring_genes` (also `get_facet_top_genes`) pages with
+  `n` (up to 100000), `offset` and `fetch_all=True`, and filters with
+  `effect_gate` and `strict`; `get_facet_top_modules`,
+  `get_facet_effects_overview`, `get_geneset_facet_effects` (module
+  replication next to the member genes), `get_gene_detection` (the
+  low-detection pill), `get_facet_donor_values` and
+  `get_facet_donor_plot` (one value per donor per cohort; optional
+  `db_id`).
+* Donor variability (API 2.45.0, exploratory):
+  `get_database_donor_variability`, `get_gene_donor_variability`,
+  `get_geneset_donor_variability`, `get_donor_variability_top`.
+* Gene set ranks within one dataset (API 2.45.0): `get_geneset_rank`,
+  `get_module_ranks`. Never compare ranks or means between datasets.
+* `get_de_study_summary`: significant gene counts of every contrast of
+  a DE study in one call (API 2.45.0).
+* Access (API 2.45.0): datasets that are not `access: public` are
+  invisible to anonymous callers (missing from listings, 404 by id).
+  `rescan_databases`, `rescan_genesets`, `rescan_module_variability`,
+  `rescan_catalogs`, `get_plot_cache_stats`, `clear_plot_cache`,
+  `admin_release` and `admin_restore` need an admin account (403
+  otherwise).
 * `exclude_secondary` (default `True`) on `get_gene_stats_all`,
   `get_module_variability`, `get_facet` and the facet test views keeps
   reanalyses out of pooled numbers.
@@ -457,6 +482,16 @@ print(cards["strongest_facet"], list(cards["by_scope"]))
 xeno = client.get_facet_recurring_genes(
     "app_nlgf", scope="xenograft_human_in_mouse")
 
+# API 2.45.0: page through every replicated gene, then look at the
+# donors behind one result before trusting it.
+every = client.get_facet_top_genes("braak", cell_type="microglia",
+                                   n=500, fetch_all=True)
+values = client.get_facet_donor_values("sex", "microglia", gene="XIST")
+plot = client.get_facet_donor_plot("sex", "microglia", gene="XIST",
+                                   dest="xist_sex.png")
+print(plot["caption"])          # effects, intervals and q per cohort
+modules = client.get_facet_top_modules("braak", effect_gate=True)
+
 # Which datasets share donors, and the DRAFT cohort table.
 groups = client.get_donor_groups()
 cohorts = client.get_facet_cohorts()
@@ -489,8 +524,12 @@ How to read the fields:
   `analysis_level` `below_floor` (fewer than 4 replicates) or `cell`
   are descriptive only. `lambda_gc` above 1.3 (`inflated`) means the
   p values of that unit are too small. `get_facet_recurring_genes` lists
-  replicated genes that pass the effect gate (`n_replicated`,
-  `n_effect_gate`, `n_replicated_effect`, `n_genes_in_family`).
+  the replicated genes (`n_replicated`, `n_genes_in_family`);
+  `effect_gate=True` keeps those that pass the effect gate
+  (`n_effect_gate`) and `strict=True` those that pass the strict tier.
+  Module results (`get_facet_top_modules`) use a standardised effect
+  gate and have no strict tier. Directionless gene sets (GWAS, MAGMA)
+  are `not_tested`, never "not replicated".
   A cohort is a row group of the DRAFT cohort table and counts
   once. Cell type labels are counted by group (`microglial cell`,
   `Microglia` and `Mic P2RY12` are all `microglia`, with `cl_id`
