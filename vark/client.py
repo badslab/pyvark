@@ -2820,9 +2820,10 @@ class AnthiveClient:
         of at least ``effect_gate_tau`` (0.2 SD per contrast, 0.2/3 per
         Braak stage, 0.2 per decade, 0.1 per e4 allele) in 2 cohorts,
         read on the lower 95 percent confidence bound. There is no
-        strict tier for modules: ``strict``, ``r_strong``,
-        ``replicated_strong``, ``r_treat`` and ``replicated_effect`` are
-        always ``None``. Directionless sets (GWAS, MAGMA, bidirectional)
+        strict tier for modules: rows have no ``strict``, ``r_strong``,
+        ``replicated_strong``, ``r_treat`` or ``replicated_effect`` keys
+        (servers before the 2.45.0 release sent them as ``None``).
+        Directionless sets (GWAS, MAGMA, bidirectional)
         are left out. Ranked by r-value, then k, agreement and the
         standardised effect.
 

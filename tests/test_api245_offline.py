@@ -79,6 +79,7 @@ def test_get_version_documents_compatible_pyvark():
 def test_docstrings_use_new_names():
     top_modules = AnthiveClient.get_facet_top_modules.__doc__
     assert 'effect_gate_rule' in top_modules
+    assert 'rows have no ``strict``' in top_modules
     assert 'celltype_group' in AnthiveClient.get_donor_variability_top.__doc__
     assert '100000' in AnthiveClient.get_facet_recurring_genes.__doc__
     assert '1 to 500)' not in AnthiveClient.get_facet_recurring_genes.__doc__

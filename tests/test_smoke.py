@@ -394,6 +394,10 @@ def test_top_modules_and_overview_live(client):
     _needs_2_45(client)
     modules = client.get_facet_top_modules('sex', n=2)
     assert 'effect_gate_rule' in modules and 'effect_gate' not in modules
+    for row in modules['rows']:
+        for key in ('strict', 'r_strong', 'replicated_strong', 'r_treat',
+                    'replicated_effect'):
+            assert row.get(key) is None  # absent on 2.45.0 as released
     overview = client.get_facet_effects_overview('sex', n=2)
     assert 'headline' in overview and 'cell_types' in overview
     if modules['rows']:

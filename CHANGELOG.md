@@ -45,6 +45,10 @@ responses are passed through unchanged.
   `fetch_all` (follows `has_more` and joins the pages); `n_matching`,
   `has_more` and `headline` go to `df.attrs`. `get_facet_top_genes` is
   the same method under the MCP tool's name.
+- `get_facet_top_modules` docstring: module rows carry no gene-tier
+  keys (`strict`, `r_strong`, `replicated_strong`, `r_treat`,
+  `replicated_effect`); the server dropped them instead of sending
+  `None`.
 - Constants `FOREST_DETAIL`, `DONOR_PLOT_FORMATS`,
   `DONOR_VARIABILITY_RUNGS`, `REMOVED_FACET_ALIASES`.
 
