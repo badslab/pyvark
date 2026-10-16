@@ -55,6 +55,26 @@ class AnthiveWarmingUpError(AnthiveAPIError):
         self.waited = waited
 
 
+class DatasetDepositError(AnthiveAPIError):
+    """A refused answer from a ``/datasets/deposit`` route (REST API
+    2.46.0+). The server answers JSON ``{"status": "<word>", "message":
+    ...}``; for example 403 ``forbidden`` (not a signed-in member of
+    ``datasets_upload_groups``), 404 ``not_found`` (also for another
+    user's deposit), 404 ``no_report``, 429 ``rate_limited``, 503
+    ``disabled``.
+
+    Attributes:
+        status: The status word of the body (``''`` when absent).
+    """
+
+    def __init__(self, message: str, *, status_code: int,
+                 body: Optional[Dict[str, Any]] = None,
+                 response: Optional[requests.Response] = None):
+        super().__init__(message, status_code=status_code, body=body,
+                         response=response)
+        self.status = str((body or {}).get('status') or '')
+
+
 class ServerWarmingUpWarning(UserWarning):
     """Emitted (once per wait) when the client starts waiting for a
     server that answers 503 ``warming_up``."""
@@ -160,3 +180,14 @@ def raise_for_upload_status(response: requests.Response) -> None:
     else:
         error_class = _UPLOAD_ERRORS_BY_STATUS.get(status, AnthiveAPIError)
     raise error_class(message, status_code=status, body=body, response=response)
+
+
+def raise_for_deposit_status(response: requests.Response) -> None:
+    """Raise :class:`DatasetDepositError` for a non-2xx answer of a
+    dataset deposit route."""
+    if response.ok:
+        return
+    body = _decode_body(response)
+    raise DatasetDepositError(_message_from(body, response),
+                              status_code=response.status_code, body=body,
+                              response=response)

@@ -49,7 +49,7 @@ def sleeps(monkeypatch):
 
 
 def test_version():
-    assert vark.__version__ == '0.10.1'
+    assert tuple(int(part) for part in vark.__version__.split('.')) >= (0, 10, 1)
 
 
 def test_default_max_wait():

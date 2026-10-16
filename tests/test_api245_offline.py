@@ -42,8 +42,8 @@ NEW_METHODS = {
 
 
 def test_version_and_api_target():
-    assert vark.__version__.startswith('0.10.')
-    assert AnthiveClient.API_TARGET == '2.45.0'
+    assert tuple(int(part) for part in vark.__version__.split('.')) >= (0, 10, 0)
+    assert AnthiveClient.API_TARGET == '2.46.0'
 
 
 def test_new_methods_exist_and_are_documented():

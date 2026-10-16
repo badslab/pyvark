@@ -3,6 +3,46 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.11.0 (2026-10-16, unreleased)
+
+Targets anthive REST API 2.46.0 (`API_TARGET`; anthive4's
+`doc/API_CHANGELOG.md`, "2.46.0" and "2.46.1 (unreleased)"). 0.10.0 and
+0.10.1 were never uploaded; 0.11.0 contains both.
+
+### Added (API 2.46.0)
+
+- Read-only dataset deposit methods for depositors and admins:
+  `list_deposits(all=False)`, `get_deposit(deposit_id)`,
+  `get_deposit_report(deposit_id)`, `get_deposit_vocab()` and
+  `get_deposit_group(data_project, basename=None)`. Uploading a dataset
+  is `vark datasets upload` (the Go CLI); pyvark has no upload,
+  complete, withdraw, approve or reject method. The routes answer 403
+  `forbidden` to everyone outside the site's `datasets_upload_groups`.
+- `DatasetDepositError` (a subclass of `AnthiveAPIError` and
+  `requests.HTTPError`): raised for every refused deposit answer, with
+  the body's status word in `status` (`forbidden`, `not_found`,
+  `no_report`, `rate_limited`, `disabled`, ...).
+
+### Changed
+
+- `get_health` docstring: a running server with an empty catalogue
+  answers 200 with `databases: 0` and `note: "empty catalog"`; a 503
+  now means a real failure.
+- The 2.45 changes that affect existing methods were already handled
+  in 0.10.0: datasets that are not `access: public` need a signed-in
+  caller, `/databases/{id}/module-ranks`, `celltype_group` on
+  `/donor-variability/top`, `effect_gate_rule` on the module routes.
+  The 2.46.1 facet 503 `warming_up` answer is handled by 0.10.1's retry.
+- Class docstring names the deposit methods and `vark datasets upload`.
+
+### Tests
+
+- `tests/test_deposits_offline.py` (mocked HTTP): paths, `all` and
+  `basename` parameters, error mapping, the `/health` note, and that no
+  upload method exists.
+- `tests/test_smoke.py`: a live deposit check that accepts 403
+  `forbidden` / 503 `disabled` for callers outside the upload groups.
+
 ## 0.10.1 (2026-10-16, unreleased)
 
 ### Added

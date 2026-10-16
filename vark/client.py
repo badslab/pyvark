@@ -4,7 +4,8 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.45.0** (facet tests with
+API surface verified against **REST API 2.46.0** (read-only dataset
+deposit status for depositors and admins, facet tests with
 facet scopes, replication with an effect gate and forest rows, module
 replication, per-donor values and plots, donor variability, gene set
 ranks, gene detection, donor groups, exclude_secondary, replicate
@@ -41,12 +42,12 @@ from ._credentials import (
     find_vark_server_by_name,
 )
 from .exceptions import (AnthiveWarmingUpError, ServerWarmingUpWarning,
-                         raise_for_upload_status)
+                         raise_for_deposit_status, raise_for_upload_status)
 
 _LOG = logging.getLogger('vark')
 
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -259,6 +260,13 @@ class AnthiveClient:
     :attr:`headers` does not sign you in. A call on loopback without a
     proxy (a local maintenance tool) counts as identified.
 
+    Dataset deposits (REST API 2.46.0+): upload with the Go CLI,
+    ``vark datasets upload``; pyvark only reads deposit state
+    (:meth:`list_deposits`, :meth:`get_deposit`,
+    :meth:`get_deposit_report`, :meth:`get_deposit_vocab`,
+    :meth:`get_deposit_group`), for members of the site's
+    ``datasets_upload_groups``.
+
     Admin-only methods (403 for other signed-in users, 2.45.0+):
     :meth:`rescan_databases`, :meth:`rescan_genesets`,
     :meth:`rescan_module_variability`, :meth:`rescan_catalogs`,
@@ -284,7 +292,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.45.0"
+    API_TARGET = "2.46.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.
@@ -491,6 +499,12 @@ class AnthiveClient:
         Includes ``mean_response_ms`` / ``p50_response_ms`` / ``n_samples``
         (server-side wall-clock over the last 1024 non-probe requests).
         Use :meth:`pick_fastest` to choose between replicas.
+
+        A running server with an empty catalogue answers 200 with
+        ``databases: 0`` and ``note: "empty catalog"`` (REST API 2.46.0+;
+        2.45.1 and older answered 503 "No databases available"). A 503
+        (``HTTPError``) now means a real failure: the catalogue is not
+        loaded yet or the registry is unreadable.
         """
         return self._get('/health')
 
@@ -4218,6 +4232,133 @@ class AnthiveClient:
             return target
         finally:
             response.close()
+
+    # ── Dataset deposits, read-only (REST API 2.46.0+) ──────────────────
+    #
+    # Datasets are deposited with the Go CLI: ``vark datasets upload``
+    # (presigned S3 uploads, complete, withdraw). pyvark only reads the
+    # state of deposits. Every route answers 403 ``forbidden`` to callers
+    # who are not signed-in members of the site's
+    # ``datasets_upload_groups`` (default ``admins``, ``curators``), and
+    # 503 ``disabled`` where deposits are switched off. Errors raise
+    # :class:`DatasetDepositError` (``status`` holds the status word).
+
+    def _deposit_get(self, path: str,
+                     params: Optional[Dict[str, Any]] = None) -> Dict:
+        """GET a deposit route; non-2xx raises DatasetDepositError."""
+        response = self._request('GET', path, params=params)
+        raise_for_deposit_status(response)
+        return response.json()
+
+    def list_deposits(self, all: bool = False) -> Dict:
+        """``GET /datasets/deposit``. Your dataset deposits (REST API
+        2.46.0+). Uploading is done with ``vark datasets upload``, not
+        pyvark.
+
+        Returns ``{deposits, all}``; each deposit is the summary of
+        :meth:`get_deposit` (``deposit_id``, ``data_project``,
+        ``basename``, ``state``, ``deposit_kind``, ``db_id``,
+        ``version``, ``kind``, ``held_reasons``, ``update_of``,
+        ``continues``, ``total_bytes``, ``created``, ``updated``,
+        ``completed``, ``expires``; admins also ``user``).
+
+        Args:
+            all: ``True`` lists every user's deposits (admins only;
+                :meth:`get_deposit_vocab` says ``caller.may_list_all_deposits``).
+                Sent only when ``True``.
+
+        Raises:
+            DatasetDepositError: 403 ``forbidden`` for callers outside
+                ``datasets_upload_groups`` (or ``all=True`` for a
+                non-admin), 503 ``disabled``.
+        """
+        return self._deposit_get('/datasets/deposit',
+                                 {'all': 'true'} if all else None)
+
+    def get_deposit(self, deposit_id: str) -> Dict:
+        """``GET /datasets/deposit/{deposit_id}``. Status of one deposit
+        (REST API 2.46.0+).
+
+        The summary of :meth:`list_deposits` plus ``error``,
+        ``warnings``, ``files`` (``{name, kind, key, size, sha256,
+        method, state}``; ``method`` ``reuse`` for published files a
+        metadata update reuses), ``watch`` (``{state, served,
+        catalog_verified, incoming_deleted}`` or ``None``), ``report``
+        (``{result, publish, held_reasons, counts, problems: [{id,
+        status, summary, fix}]}`` or ``None``), ``report_available``,
+        ``events`` (``{time, action, actor, detail}``), ``approval``
+        and, while ``completing``, ``progress``; a failed background
+        complete shows ``complete_error``.
+
+        ``state`` is ``uploading``, ``completing``, ``uploaded``
+        (complete, not yet seen by the watcher), ``seen``, ``stable``,
+        ``checking``, ``importing`` (DE tables), ``live``, ``held``,
+        ``failed``, ``needs_decision``, ``rejected``, ``withdrawn``,
+        ``expired`` or ``superseded``. ``deposit_kind`` is ``dataset``,
+        ``de_only`` or ``metadata_update``; ``kind`` is what the watcher
+        made of it (``new``, ``update_patch``, ...).
+
+        Raises:
+            DatasetDepositError: 404 ``not_found`` (also for another
+                user's deposit), 403 ``forbidden``.
+        """
+        return self._deposit_get(f'/datasets/deposit/{deposit_id}')
+
+    def get_deposit_report(self, deposit_id: str) -> Dict:
+        """``GET /datasets/deposit/{deposit_id}/report``. The redacted
+        ingest check report of a deposit (schema
+        ``anthive.ingest_check/1``, curator audience, no server paths;
+        REST API 2.46.0+).
+
+        Raises:
+            DatasetDepositError: 404 ``no_report`` before the check ran
+                (the body then carries ``state`` and ``reason``), 404
+                ``not_found``, 403 ``forbidden``.
+        """
+        return self._deposit_get(f'/datasets/deposit/{deposit_id}/report')
+
+    def get_deposit_vocab(self) -> Dict:
+        """``GET /datasets/deposit/vocab``. Everything a depositor needs
+        to prepare a deposit (REST API 2.46.0+): ``uploads_enabled``,
+        ``limits``, ``naming``, ``file_kinds``, ``prefix``, ``mus``
+        (required and recommended sidecar fields, the vocabulary,
+        ``field_info``), ``sidecar_keys``, ``seed_md`` and ``index_md``
+        (with templates and ``required_spec``), ``facets``,
+        ``de_presets``, ``de_sidecar_keys``, ``held_reasons``,
+        ``update_policy``, ``states`` and ``caller`` (``{user,
+        is_admin, may_replace_de_study, may_list_all_deposits,
+        may_update_any_dataset}``).
+
+        Raises:
+            DatasetDepositError: 403 ``forbidden`` for callers outside
+                ``datasets_upload_groups``.
+        """
+        return self._deposit_get('/datasets/deposit/vocab')
+
+    def get_deposit_group(self, data_project: str,
+                          basename: Optional[str] = None) -> Dict:
+        """``GET /datasets/deposit/groups/{data_project}``. Whether you
+        may deposit into a group, and update a dataset in it (REST API
+        2.46.0+).
+
+        Returns ``{data_project, exists, group_id?, may_create?,
+        reason?, dataset_exists?, may_update?, db_id?, inactive?}``.
+        ``db_id`` is given only when you may deposit a new version;
+        ``may_create`` / ``reason`` for a group that does not exist yet.
+        A retired dataset is never offered to non-admins.
+
+        Args:
+            data_project: Group (collection folder) name.
+            basename: A dataset basename in that group. Sent only when
+                given.
+
+        Raises:
+            DatasetDepositError: 429 ``rate_limited`` (per user), 403
+                ``forbidden``.
+        """
+        return self._deposit_get(
+            f'/datasets/deposit/groups/{data_project}',
+            {'basename': basename} if basename is not None else None)
 
     # ── Plot cache admin ────────────────────────────────────────────────
 

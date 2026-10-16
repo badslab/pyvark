@@ -484,3 +484,27 @@ def test_apoe_carrier_alias_is_gone_live(client):
     with pytest.raises(requests.HTTPError) as excinfo:
         client.get_facet_recurring_genes('apoe_carrier', n=1)
     assert excinfo.value.response.status_code in (400, 404)
+
+
+# ── API 2.46.0: read-only dataset deposits ──────────────────────────────────
+
+
+def test_deposit_routes_live(client):
+    from vark import DatasetDepositError
+    version = client._get('/').get('version', '0')
+    if tuple(int(part) for part in version.split('.')[:2]) < (2, 46):
+        pytest.skip(f'server {version} predates API 2.46.0')
+    try:
+        vocab = client.get_deposit_vocab()
+    except DatasetDepositError as error:
+        # Not a member of datasets_upload_groups, or deposits switched off.
+        assert error.status in ('forbidden', 'disabled')
+        with pytest.raises(DatasetDepositError):
+            client.list_deposits()
+        return
+    assert 'caller' in vocab and 'limits' in vocab
+    listing = client.list_deposits()
+    assert 'deposits' in listing
+    for deposit in listing['deposits'][:1]:
+        status = client.get_deposit(deposit['deposit_id'])
+        assert status['deposit_id'] == deposit['deposit_id']
