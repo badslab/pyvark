@@ -23,9 +23,12 @@ Requirements:
 from __future__ import annotations
 
 import json as _json
+import logging
 import os
 import re
 import sys
+import time
+import warnings
 from pathlib import Path
 from typing import (Any, BinaryIO, Dict, Iterable, List, Mapping, Optional,
                     Sequence, Tuple, Union)
@@ -37,10 +40,13 @@ from ._credentials import (
     find_vark_credentials_for,
     find_vark_server_by_name,
 )
-from .exceptions import raise_for_upload_status
+from .exceptions import (AnthiveWarmingUpError, ServerWarmingUpWarning,
+                         raise_for_upload_status)
+
+_LOG = logging.getLogger('vark')
 
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -231,6 +237,16 @@ class AnthiveClient:
             When discovery finds a server with ``insecure: true``, the
             client's ``verify`` is demoted to ``False`` (unless the
             caller passed an explicit ``verify=`` already).
+        warmup_max_wait: Seconds to keep retrying while the server answers
+            503 ``{"status": "warming_up", "retry_after": N}`` (REST API
+            2.46.1+, facet routes right after a restart). The client
+            sleeps ``retry_after`` (else the ``Retry-After`` header)
+            between tries, logs a warning on the ``vark`` logger and
+            emits a :class:`ServerWarmingUpWarning` once per wait, and
+            raises :class:`AnthiveWarmingUpError` when the server is
+            still warming up after this many seconds. Default 180; ``0``
+            raises at once. Other 503 answers are not retried. Also an
+            attribute you can change later.
 
     Access (REST API 2.45.0+): datasets that are not ``access: public``
     are hidden from callers without an identity. They are missing from
@@ -296,7 +312,9 @@ class AnthiveClient:
         auth: Optional[Any] = None,
         verify: Union[bool, str] = True,
         vark_config: Union[str, Path, bool, None] = None,
+        warmup_max_wait: float = 180.0,
     ):
+        self.warmup_max_wait = float(warmup_max_wait)
         if base_url is None:
             base_url = os.environ.get('ANTHIVE_API_URL')
             if base_url is None:
@@ -356,10 +374,71 @@ class AnthiveClient:
 
     # ── HTTP primitives ──────────────────────────────────────────────────
 
+    @staticmethod
+    def _warming_up(response: 'requests.Response'
+                    ) -> Optional[Tuple[float, Dict[str, Any]]]:
+        """``(retry_after, body)`` when ``response`` is a 503
+        ``warming_up`` answer (REST API 2.46.1+), else ``None``."""
+        if response.status_code != 503:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        if not isinstance(body, dict) or body.get('status') != 'warming_up':
+            return None
+        retry_after: Any = body.get('retry_after')
+        if retry_after is None:
+            retry_after = response.headers.get('Retry-After')
+        try:
+            seconds = float(retry_after)
+        except (TypeError, ValueError):
+            seconds = 5.0
+        return max(seconds, 1.0), body
+
+    def _send(self, method: str, url: str, **kwargs: Any
+              ) -> 'requests.Response':
+        """Send one request; while the server answers 503 ``warming_up``,
+        sleep and retry for up to :attr:`warmup_max_wait` seconds, then
+        raise :class:`AnthiveWarmingUpError`. Every other answer is
+        returned unchecked."""
+        sender = {'GET': requests.get, 'POST': requests.post}.get(method)
+        waited = 0.0
+        warned = False
+        while True:
+            if sender is not None:
+                response = sender(url, **kwargs)
+            else:
+                response = requests.request(method, url, **kwargs)
+            warming = self._warming_up(response)
+            if warming is None:
+                return response
+            retry_after, body = warming
+            remaining = self.warmup_max_wait - waited
+            if remaining <= 0:
+                raise AnthiveWarmingUpError(
+                    f"{url}: the server is still warming up after "
+                    f"{waited:.0f} s (warmup_max_wait="
+                    f"{self.warmup_max_wait:g}); retry later or raise "
+                    f"warmup_max_wait", retry_after=retry_after,
+                    waited=waited, body=body, response=response)
+            pause = min(retry_after, remaining)
+            _LOG.warning('anthive server is warming up (%s); retrying in '
+                         '%.0f s (waited %.0f of %g s)', url, pause, waited,
+                         self.warmup_max_wait)
+            if not warned:
+                warnings.warn(
+                    f"anthive server is warming up; waiting up to "
+                    f"{self.warmup_max_wait:g} s", ServerWarmingUpWarning,
+                    stacklevel=3)
+                warned = True
+            time.sleep(pause)
+            waited += pause
+
     def _get(self, path: str, params: Optional[Dict] = None) -> Any:
         url = f"{self.base_url}{path}"
-        response = requests.get(
-            url, params=params, headers=self.headers,
+        response = self._send(
+            'GET', url, params=params, headers=self.headers,
             timeout=self.timeout, auth=self.auth, verify=self.verify,
         )
         response.raise_for_status()
@@ -370,8 +449,8 @@ class AnthiveClient:
         """GET returning the raw response (for non-JSON bytes — plots,
         changelog)."""
         url = f"{self.base_url}{path}"
-        response = requests.get(
-            url, params=params, headers=self.headers,
+        response = self._send(
+            'GET', url, params=params, headers=self.headers,
             timeout=self.timeout, auth=self.auth, verify=self.verify,
         )
         response.raise_for_status()
@@ -379,8 +458,8 @@ class AnthiveClient:
 
     def _post(self, path: str, json: Optional[Dict] = None) -> Any:
         url = f"{self.base_url}{path}"
-        response = requests.post(
-            url, json=json, headers=self.headers,
+        response = self._send(
+            'POST', url, json=json, headers=self.headers,
             timeout=self.timeout, auth=self.auth, verify=self.verify,
         )
         response.raise_for_status()
@@ -390,13 +469,15 @@ class AnthiveClient:
                  timeout: Optional[float] = None,
                  **kwargs: Any) -> 'requests.Response':
         """Send one request and return the raw response WITHOUT checking
-        its status (callers decide how to map errors)."""
+        its status (callers decide how to map errors). Only GET waits
+        for a warming-up server; a POST with a file body is sent once."""
         url = f"{self.base_url}{path}"
-        return requests.request(
-            method, url, headers=self.headers,
-            timeout=self.timeout if timeout is None else timeout,
-            auth=self.auth, verify=self.verify, **kwargs,
-        )
+        common = dict(headers=self.headers,
+                      timeout=self.timeout if timeout is None else timeout,
+                      auth=self.auth, verify=self.verify, **kwargs)
+        if method.upper() == 'GET':
+            return self._send('GET', url, **common)
+        return requests.request(method, url, **common)
 
     # ── Info endpoints ───────────────────────────────────────────────────
 
@@ -861,8 +942,8 @@ class AnthiveClient:
                 return _to_dataframe(result, fill_na_genes=fill_na)
             return result
         url = f"{self.base_url}/databases/{db_id}/cells"
-        response = requests.get(
-            url, params=params, headers=self.headers,
+        response = self._send(
+            'GET', url, params=params, headers=self.headers,
             timeout=self.timeout, auth=self.auth, verify=self.verify,
         )
         response.raise_for_status()

@@ -309,6 +309,10 @@ discovery automatically (no filesystem in the browser).
   `get_database_papers`, `get_database_context`, `get_library_status`.
 * Paper upload (API 2.40+, uploaders only): `get_paper_upload_requirements`,
   `upload_paper`, `upload_papers`, `paper_items_from_folder`.
+* A server that was just restarted may answer 503 `warming_up` on the
+  facet routes (API 2.46.1+). The client waits and retries for up to
+  `warmup_max_wait` seconds (default 180, a constructor argument), then
+  raises `AnthiveWarmingUpError`.
 * `pick_fastest(base_urls, ...)` — server-selection helper that
   consumes `/health` latency telemetry.
 

@@ -42,7 +42,7 @@ NEW_METHODS = {
 
 
 def test_version_and_api_target():
-    assert vark.__version__ == '0.10.0'
+    assert vark.__version__.startswith('0.10.')
     assert AnthiveClient.API_TARGET == '2.45.0'
 
 

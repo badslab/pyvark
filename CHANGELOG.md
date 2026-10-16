@@ -3,6 +3,26 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.10.1 (2026-10-16, unreleased)
+
+### Added
+
+- Waiting for a warming-up server (anthive REST API 2.46.1+). Right
+  after a restart the facet routes may answer 503 `{"status":
+  "warming_up", "retry_after": N}` with a `Retry-After` header. Every
+  GET and the JSON POSTs now sleep `retry_after` (else the header, at
+  least 1 s) and retry, for up to `warmup_max_wait` seconds (new
+  constructor argument and attribute, default 180; `0` raises at once).
+  Each retry logs a warning on the `vark` logger, and a
+  `ServerWarmingUpWarning` is emitted once per wait. When the budget
+  runs out the client raises `AnthiveWarmingUpError` (a subclass of
+  `AnthiveAPIError` and `requests.HTTPError`, with `retry_after` and
+  `waited`). Other 503 answers (uploads switched off, a proxy error)
+  are not retried, and POSTs that send a file body are sent once.
+- `tests/test_warmup_offline.py` (mocked HTTP and sleep).
+
+`API_TARGET` stays 2.45.0: this release adds no 2.46 routes.
+
 ## 0.10.0 (2026-10-13, unreleased)
 
 Targets anthive REST API 2.45.0 (`API_TARGET`; anthive4's
