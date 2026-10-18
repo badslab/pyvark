@@ -97,3 +97,13 @@ def test_health_empty_catalog_documented(http, client):
     http.queue(make_response(200, {'status': 'healthy', 'databases': 0,
                                    'note': 'empty catalog'}))
     assert client.get_health()['note'] == 'empty catalog'
+
+
+def test_score_sidecar_docstrings():
+    module_scores = AnthiveClient.list_module_scores.__doc__
+    for field in ('storage', 'query_table', 'query_sql', 'count_by_storage',
+                  'sidecar_error', 'scores_sidecar'):
+        assert field in module_scores
+    schema = AnthiveClient.analytics_schema.__doc__
+    assert 'score_sidecar' in schema and 'example_sql' in schema
+    assert 'FILTER' in schema

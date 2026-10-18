@@ -1283,7 +1283,35 @@ class AnthiveClient:
 
     def analytics_schema(self, db_id: str) -> Dict:
         """``GET /databases/{db_id}/analytics/schema``. Tables + columns +
-        3-row samples visible to the analytics sandbox."""
+        3-row samples visible to the analytics sandbox.
+
+        Returns ``{db_id, tables, score_sidecar}``. ``score_sidecar``
+        (REST API 2.45.0+) describes the view of the same name that
+        exposes the dataset's sidecar module scores to SQL:
+        ``{available, view, columns, n_scores, n_scores_by_source,
+        note, example_sql}``, or ``{available: False, reason}``. The
+        view has one row per cell and score: ``cell_id, cell_name,
+        source`` (``geneset`` | ``ucell``), ``catalog``, ``module``,
+        ``column_name, score``. It is described without being scanned.
+
+        Querying it with :meth:`analytics_query`: always filter on
+        ``source``, ``catalog`` and ``module`` (only matching row groups
+        are read) and join other tables on ``cell_name``. For several
+        scores side by side, aggregate per cell, for example::
+
+            SELECT cell_name,
+                   MAX(score) FILTER (WHERE module = 'bellenguez') AS a,
+                   MAX(score) FILTER (WHERE module = 'royalblue') AS b
+            FROM score_sidecar
+            WHERE source = 'geneset'
+              AND module IN ('bellenguez', 'royalblue')
+            GROUP BY cell_name
+
+        A wide view with one column per score is not offered (it would
+        aggregate the whole sidecar on every query). The ``query_sql``
+        of each :meth:`list_module_scores` row is a ready query for one
+        score.
+        """
         return self._get(f'/databases/{db_id}/analytics/schema')
 
     def analytics_query(self,
@@ -1417,21 +1445,43 @@ class AnthiveClient:
     @_cache_short(ttl=60)
     def list_module_scores(_self, db_id: str) -> Dict:
         """``GET /databases/{db_id}/module_scores``. Pre-computed
-        module-score columns already on the dataset (``obsnum``).
+        gene set (module) scores of a dataset, wherever they are stored.
+
+        Scores live either as ``obsnum`` columns of the duckdb or, on
+        most current datasets, only in the dataset's scores sidecar
+        (``<dataset>.scores.parquet``). REST API 2.45.0+ lists both in
+        the same row shape (older servers listed the ``obsnum`` columns
+        only, so they answered ``count: 0`` for sidecar-only datasets).
+        A duckdb column wins over a sidecar row of the same set.
+        S3-backed datasets list duckdb columns only.
 
         Returns the full discovery dict::
 
             {
                 "db_id": "...",
                 "count": <N>,
+                "count_by_storage": {"duckdb": <n>, "scores_sidecar": <n>},
                 "column_naming": {"separator": "::", "template": "..."},
+                "query_tables": {"duckdb": "obsnum",
+                                 "scores_sidecar": "score_sidecar"},
+                "sidecar_error": "...",   # only when unreadable
                 "scored_genesets": [
-                    {"study": ..., "experiment": ..., "name": ...,
-                     "column": ..., "n_genes": ...}, ...
+                    {"geneset_id": ..., "column_name": ...,
+                     "storage": "duckdb" | "scores_sidecar",
+                     "query_table": "obsnum" | "score_sidecar",
+                     "query_sql": "SELECT cell_name, score AS ... ",
+                     "n_genes": ..., "stats": {n, min, max, mean, std,
+                                               median},
+                     "ucell_column_name": ..., "ucell_stats": ...}, ...
                 ]
             }
 
-        Use ``response["scored_genesets"]`` for the list itself.
+        ``query_sql`` is a ready SELECT returning ``cell_name`` and the
+        score, for :meth:`analytics_query`; ``column_name`` is the name
+        the plot routes take. ``ucell_column_name`` / ``ucell_stats``
+        appear when the sidecar also holds the set's UCell score.
+        ``stats`` are over cells (descriptive, not donor-level). Use
+        ``response["scored_genesets"]`` for the list itself.
         """
         return _self._get(f'/databases/{db_id}/module_scores')
 

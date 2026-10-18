@@ -508,3 +508,20 @@ def test_deposit_routes_live(client):
     for deposit in listing['deposits'][:1]:
         status = client.get_deposit(deposit['deposit_id'])
         assert status['deposit_id'] == deposit['deposit_id']
+
+
+def test_sidecar_module_score_is_queryable_live(client):
+    _needs_2_45(client)
+    for db in client.get_databases():
+        listing = client.list_module_scores(db['id'])
+        rows = [row for row in listing.get('scored_genesets', [])
+                if row.get('storage') == 'scores_sidecar']
+        if rows:
+            break
+    else:
+        pytest.skip('no dataset with sidecar module scores')
+    schema = client.analytics_schema(db['id'])
+    assert schema['score_sidecar']['available'] is True
+    result = client.analytics_query(db['id'], rows[0]['query_sql'], limit=5)
+    assert result['columns'][0] == 'cell_name'
+    assert result['row_count'] == rows[0]['stats']['n']

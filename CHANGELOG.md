@@ -3,11 +3,13 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
-## 0.11.0 (2026-10-16, unreleased)
+## 0.11.0 (unreleased)
 
-Targets anthive REST API 2.46.0 (`API_TARGET`; anthive4's
-`doc/API_CHANGELOG.md`, "2.46.0" and "2.46.1 (unreleased)"). 0.10.0 and
-0.10.1 were never uploaded; 0.11.0 contains both.
+The release that includes 0.10.0 and 0.10.1 (neither was uploaded on
+their own; their entries below are part of 0.11.0). Targets anthive
+REST API 2.46 (`API_TARGET` "2.46.0", which records major.minor) and
+works with 2.46.1: the facet 503 `warming_up` answers of 2.46.1 are
+retried (0.10.1), and 2.46.1 removes or renames nothing.
 
 ### Added (API 2.46.0)
 
@@ -34,6 +36,13 @@ Targets anthive REST API 2.46.0 (`API_TARGET`; anthive4's
   `/donor-variability/top`, `effect_gate_rule` on the module routes.
   The 2.46.1 facet 503 `warming_up` answer is handled by 0.10.1's retry.
 - Class docstring names the deposit methods and `vark datasets upload`.
+- `list_module_scores` docstring: scores kept only in the scores
+  sidecar are listed (API 2.45.0+), with `storage`, `query_table`,
+  `query_sql`, `count_by_storage`, `query_tables` and `sidecar_error`;
+  it said "obsnum" columns only.
+- `analytics_schema` docstring: the `score_sidecar` block and how to
+  query the `score_sidecar` view (filter on source, catalog and module;
+  several scores with `MAX(score) FILTER (...)` per cell).
 
 ### Tests
 
@@ -43,7 +52,7 @@ Targets anthive REST API 2.46.0 (`API_TARGET`; anthive4's
 - `tests/test_smoke.py`: a live deposit check that accepts 403
   `forbidden` / 503 `disabled` for callers outside the upload groups.
 
-## 0.10.1 (2026-10-16, unreleased)
+## 0.10.1 (part of 0.11.0)
 
 ### Added
 
@@ -63,7 +72,7 @@ Targets anthive REST API 2.46.0 (`API_TARGET`; anthive4's
 
 `API_TARGET` stays 2.45.0: this release adds no 2.46 routes.
 
-## 0.10.0 (2026-10-13, unreleased)
+## 0.10.0 (part of 0.11.0)
 
 Targets anthive REST API 2.45.0 (`API_TARGET`; anthive4's
 `doc/API_CHANGELOG.md`, "2.45.0"). Every new 2.45.0 route has a method;
