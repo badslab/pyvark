@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vark import (  # noqa: E402
     AnthiveClient,
     ArtefactError,
+    ArtefactFileNotFoundError,
     ArtefactIntegrityError,
     ArtefactNotFoundError,
     ArtefactNotOnThisSiteError,
@@ -291,6 +292,10 @@ def alice(server) -> AnthiveClient:
     return _client(server, 'alice')
 
 
+def test_server_is_2_47(anon):
+    assert not anon._server_older_than((2, 47, 0)), anon.get_version().get('version')
+
+
 def test_listing_follows_access_and_pages(anon, alice):
     anonymous = [row['ref'] for row in anon.list_artefacts(limit=2, all_pages=True)['artefacts']]
     assert anonymous == sorted(anonymous)
@@ -350,11 +355,55 @@ def test_download_refusals(anon):
         anon.get_artefact('NO6/_group/notes-nb')
 
 
-def test_analysis_collections(anon, alice):
-    assert [group['group_id'] for group in anon.list_analysis_collections()] == ['AT6']
-    assert [group['group_id'] for group in alice.list_analysis_collections()] == ['AT6', 'NO6']
+def test_collections(server, anon, alice):
+    assert [row['group_id'] for row in anon.list_analysis_collections()] == ['AT6']
+    analysis = alice.list_analysis_collections()
+    assert [row['group_id'] for row in analysis] == ['AT6', 'NO6']
+    atlas = analysis[0]
+    assert atlas['collection_kind'] == 'analysis' and atlas['artefacts_count'] == 5
+    assert atlas['n_datasets'] == 0 and atlas['access'] == 'public'
+    everything = alice.list_collections()
+    assert everything['n_collections'] == len(everything['collections'])
+    kinds = {row['group_id']: row['collection_kind'] for row in everything['collections']}
+    assert kinds['AT6'] == 'analysis' and kinds['NO6'] == 'analysis'
+    if server['dataset']:
+        assert kinds[server['dataset']['group_id']] == 'datasets'
+        datasets_only = alice.list_collections(kind='datasets')['collections']
+        assert {row['collection_kind'] for row in datasets_only} == {'datasets'}
+    with pytest.raises(ArtefactError) as caught:
+        anon.list_collections(kind='movies')
+    assert caught.value.status == 'invalid_kind'
     group = anon.get_group('AT6')
     assert group['collection_kind'] == 'analysis' and group['artefacts_count'] == 5
+
+
+def test_new_error_words(anon):
+    with pytest.raises(ArtefactError) as caught:
+        anon.list_artefacts(group_id='!!')
+    assert caught.value.status == 'invalid_group_id'
+    with pytest.raises(ArtefactError) as caught:
+        anon.list_artefacts(limit=500)
+    assert caught.value.status == 'invalid_limit'
+
+
+def test_server_file_not_found(server, anon):
+    # bypass the client's manifest check to reach the server's answer
+    response = anon._request('GET', '/artefacts/AT6/_group/atlas-umap/v2/files/nope.png',
+                             allow_redirects=False)
+    assert response.status_code == 404
+    assert response.json()['status'] == 'file_not_found'
+    with pytest.raises(ArtefactFileNotFoundError):
+        anon.download_artefact_file('AT6/_group/atlas-umap', 'nope.png')
+
+
+def test_artefact_purges(anon, alice):
+    with pytest.raises(ArtefactError) as caught:
+        anon.list_artefact_purges()
+    assert caught.value.status_code == 403
+    assert alice.list_artefact_purges() == {'purges': []}
+    with pytest.raises(ArtefactError) as caught:
+        alice.list_artefact_purges(state='gone')
+    assert caught.value.status == 'invalid_state'
 
 
 def test_dataset_artefact(server, alice):
