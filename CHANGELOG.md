@@ -6,9 +6,9 @@ recorded in `vark.AnthiveClient.API_TARGET`.
 ## 0.12.0 (unreleased)
 
 Targets anthive REST API 2.47 (`API_TARGET` "2.47.0"): the artefact
-store, read side. Checked against ant-serve from the anthive4 branch
-that carries 2.47.0 (unreleased; its `/version` still says 2.46.3).
-Nothing is removed or renamed.
+store, read side, and the collection listing. Checked against ant-serve
+from the anthive4 branch that carries 2.47.0 (unreleased; `/version`
+2.47.0). Nothing is removed or renamed.
 
 ### Added (API 2.47.0)
 
@@ -42,11 +42,18 @@ Nothing is removed or renamed.
     of that name), as `vark artefacts get` does. File names from the
     manifest are checked (one subfolder at most, no `..`, nothing
     absolute) before anything is written.
-  - `list_analysis_collections(scan_datasets=False)`: collections with
-    `collection_kind: analysis`. The API has no collection listing, so
-    this asks `get_group` for the group id of every visible artefact
-    (and, with `scan_datasets`, of every served dataset). An analysis
-    collection with no visible artefact and no dataset is not found.
+  - `list_artefact_purges(state=None)`: `GET /artefacts/purges`, your
+    purge requests (admins: everyone's) with `ref`, `version`, `state`,
+    `reason`, `requested`, `updated`, `requested_by` and `detail`.
+- Collections: `list_collections(kind=None, format='json')` is
+  `GET /collections` (`{n_collections, collections}`, each with
+  `group_id`, `group`, `title`, `collection_kind`, `access`,
+  `n_datasets`, `artefacts_count`, `authors`, `year`).
+  `list_analysis_collections()` returns its `kind=analysis` rows. Only
+  when a server without the route (404) reports a `/version` older than
+  2.47.0 does it fall back to asking `get_group` for the group of every
+  visible artefact (`scan_datasets=True` adds the groups of served
+  datasets); the fallback rows have the same keys.
   - `parse_artefact_ref(ref)` (static).
 - `wait_for_deposit(deposit_id, timeout=1800, poll_interval=15)`: polls
   `get_deposit` until `live`; raises `DepositHeldError` (with
@@ -57,13 +64,20 @@ Nothing is removed or renamed.
 - Exceptions (all subclasses of `AnthiveAPIError` and
   `requests.HTTPError`): `ArtefactError` (`status`, `ref`, `file`,
   `retry_after`) with `ArtefactNotFoundError`,
+  `ArtefactFileNotFoundError` (404 `file_not_found`, a subclass of
+  `ArtefactNotFoundError`; also raised before any download when the
+  manifest has no such file),
   `ArtefactNotOnThisSiteError`, `ArtefactPurgedError` (`tombstone`),
   `ArtefactPurgingError`, `ArtefactIntegrityError` (also for a
   client-side checksum mismatch, with `expected_sha256` and
   `actual_sha256`), `ArtefactStorageUnavailableError`,
   `ArtefactRateLimitedError` and `ArtefactDownloadError` (the signed
-  link failed, for example after it expired). Deposit answers:
-  `DepositNotOwnerError` (403 `not_owner`), `DepositQuotaError` (413
+  link failed, for example after it expired). Other refusals keep the
+  server's word in `status`: `invalid_group_id`, `invalid_limit`,
+  `invalid_kind`, `invalid_state`, `invalid_cursor`. Deposit answers:
+  `DepositNotOwnerError` (403 `not_owner`: a new version of someone
+  else's artefact, or a `de_table` / `de_only` deposit by someone who
+  may not update the dataset), `DepositQuotaError` (413
   `quota_exceeded`), `DepositHeldError`, `DepositStoppedError`, all
   subclasses of `DatasetDepositError`, so existing `except` clauses keep
   working.
@@ -80,6 +94,13 @@ Nothing is removed or renamed.
 
 ### Changed
 
+- `get_deposit_vocab` docstring: `caller` has `may_deposit_datasets`,
+  `may_deposit_artefacts` and `may_create_collections`, and the new
+  `artefacts` block repeats the last two (passed through unchanged).
+- `download_artefact`: the server now refuses a top-level
+  `manifest.json` in deposits (422 `invalid_name`), so the manifest is
+  always written as `manifest.json`; `_manifest.json` is kept only for
+  an older artefact that has such a file.
 - `get_group` and `get_database_info` docstrings: the new
   `collection_kind` and `artefacts_count` fields, and the 200 answer of
   an analysis collection without datasets (the fields were already
@@ -91,15 +112,18 @@ Nothing is removed or renamed.
 - `tests/test_artefacts_offline.py` (mocked HTTP): paths and
   parameters, paging, references, the redirect followed without
   credentials or headers, checksum and size mismatches, unsafe names,
-  the manifest name clash, typed errors, analysis collections and
-  `wait_for_deposit`.
+  the manifest name clash, typed errors (`file_not_found`, the new
+  error words), `list_collections`, analysis collections with the
+  pre-2.47 fallback, `list_artefact_purges`, the vocabulary rights and
+  `wait_for_deposit` (64 tests).
 - `tests/test_integration_artefacts.py`: a throw-away ant-serve from an
   anthive4 tree (port 18700-18799) with a temporary store built by
   anthive4's own `tests/artefact_helpers.py` and a fake S3 in the test
   process: access per caller, paging, tombstones, previews, local and
-  redirected downloads, 502 `integrity_error`, 404 `not_on_this_site`,
-  analysis collections and (with `ANTHIVE_IT_COLLECTION`) a dataset
-  artefact.
+  redirected downloads, 502 `integrity_error`, 404 `not_on_this_site`
+  and `file_not_found`, `invalid_group_id` / `invalid_limit`,
+  `/collections`, `/artefacts/purges` and (with `ANTHIVE_IT_COLLECTION`)
+  a dataset artefact (12 tests).
 
 ## 0.11.0 (2026-10-19)
 

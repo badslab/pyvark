@@ -316,7 +316,8 @@ discovery automatically (no filesystem in the browser).
 * Artefact store (API 2.47.0, read-only): `list_artefacts`,
   `get_artefact`, `get_artefact_versions`, `get_artefact_version`,
   `get_artefact_preview`, `download_artefact_file`, `download_artefact`
-  (sha256 verified) and `list_analysis_collections`; see
+  (sha256 verified), `list_artefact_purges`, `list_collections` and
+  `list_analysis_collections`; see
   [Artefacts](#artefacts). Depositing and purging is the Go CLI
   (`vark artefacts add`, `vark artefacts purge`).
   `wait_for_deposit` follows any deposit until it is live and raises
@@ -468,8 +469,13 @@ c.get_artefact_versions("AT6/_group/atlas-umap")  # tombstones too
 paths = c.download_artefact("AT6/_group/atlas-umap@v2", "atlas-umap/")
 png = c.download_artefact_file("AT6/_group/atlas-umap", "a.png")  # bytes
 
-# Collections that hold only analyses (no datasets of their own).
-[group["group_id"] for group in c.list_analysis_collections()]
+# Every collection you may see, or only those that hold analyses
+# (no datasets of their own).
+c.list_collections()["collections"]
+[row["group_id"] for row in c.list_analysis_collections()]
+
+# Your purge requests (requested with `vark artefacts purge`).
+c.list_artefact_purges(state="needs_decision")
 ```
 
 The download route answers with a 307 to a presigned S3 link that
@@ -479,7 +485,8 @@ signed URL out of logs and exceptions. A file is written as
 `<name>.part` and renamed once its size and sha256 match; otherwise it
 is removed and `ArtefactIntegrityError` is raised. Other refusals have
 their own classes: `ArtefactNotFoundError` (also for an artefact you
-may not see), `ArtefactPurgedError` (with `tombstone`),
+may not see), `ArtefactFileNotFoundError` (the version has no such
+file), `ArtefactPurgedError` (with `tombstone`),
 `ArtefactNotOnThisSiteError`, `ArtefactStorageUnavailableError` and
 `ArtefactRateLimitedError` (both with `retry_after`).
 
