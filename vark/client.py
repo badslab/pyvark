@@ -724,7 +724,9 @@ class AnthiveClient:
         ``replicate_basis`` and ``disease_basis``, plus (REST API
         2.44.0+) ``facet_scope``, ``control_basis``, ``facet_exclude`` and
         ``facet_exclude_reason`` (described under
-        :meth:`get_databases`). ``replicate_unit`` says what the n of a
+        :meth:`get_databases`), and (REST API 2.47.0+)
+        ``artefacts_count``, the artefacts of this dataset you may see
+        (:meth:`list_artefacts` with ``db_id``). ``replicate_unit`` says what the n of a
         test is (donors, animals or samples), ``replicate_basis``
         whether that was declared by the curators or inferred,
         ``disease_basis`` how the disease label was defined (so that
@@ -785,7 +787,14 @@ class AnthiveClient:
         authors, year, doi, pmid, accession, description) plus a list of
         ``{db_id, title, id}`` for every dataset in that group.
 
-        Raises ``HTTPError`` 404 if the 3-char ``group_id`` is unknown.
+        REST API 2.47.0+ adds ``collection_kind`` (``datasets`` or
+        ``analysis``) and ``artefacts_count`` (artefacts of the
+        collection, every scope, that you may see). An analysis
+        collection without datasets answers with ``datasets: []``, its
+        ``title`` and ``access``; see :meth:`list_analysis_collections`.
+
+        Raises ``HTTPError`` 404 if the 3-char ``group_id`` is unknown or
+        hidden from you.
         """
         return _self._get(f'/groups/{group_id}')
 
