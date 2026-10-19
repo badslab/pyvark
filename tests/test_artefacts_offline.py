@@ -28,6 +28,7 @@ from vark import (  # noqa: E402
     AnthiveClient,
     ArtefactDownloadError,
     ArtefactError,
+    ArtefactFileNotFoundError,
     ArtefactIntegrityError,
     ArtefactNotFoundError,
     ArtefactNotOnThisSiteError,
@@ -115,7 +116,8 @@ def test_methods_documented_with_api_version():
     for name in ('list_artefacts', 'get_artefact', 'get_artefact_versions',
                  'get_artefact_version', 'get_artefact_preview',
                  'download_artefact_file', 'download_artefact',
-                 'list_analysis_collections'):
+                 'list_analysis_collections', 'list_collections',
+                 'list_artefact_purges'):
         assert '2.47.0' in getattr(AnthiveClient, name).__doc__, name
 
 
@@ -127,7 +129,8 @@ def test_no_artefact_write_methods():
 
 
 def test_error_hierarchy():
-    for error_class in (ArtefactNotFoundError, ArtefactNotOnThisSiteError,
+    for error_class in (ArtefactNotFoundError, ArtefactFileNotFoundError,
+                        ArtefactNotOnThisSiteError,
                         ArtefactPurgedError, ArtefactPurgingError,
                         ArtefactIntegrityError, ArtefactRateLimitedError,
                         ArtefactStorageUnavailableError,
@@ -357,9 +360,32 @@ def test_download_verify_off(http, client):
 
 def test_download_unknown_file_lists_names(http, client):
     http.queue(make_response(200, version_payload([file_entry('a.png', FIGURE)])))
-    with pytest.raises(ArtefactNotFoundError, match='a.png'):
+    with pytest.raises(ArtefactFileNotFoundError, match='a.png') as caught:
         client.download_artefact_file(REF, 'b.png')
+    assert caught.value.status == 'file_not_found'
+    assert caught.value.file == 'b.png'
     assert len(http.calls) == 1
+
+
+def test_server_file_not_found_is_typed(http, client):
+    http.queue(make_response(200, version_payload([file_entry('a.png', FIGURE)])),
+               make_response(404, {'status': 'file_not_found', 'message': 'no file',
+                                   'ref': REF + '@v2', 'file': 'a.png'}))
+    with pytest.raises(ArtefactFileNotFoundError) as caught:
+        client.download_artefact_file(REF, 'a.png')
+    assert isinstance(caught.value, ArtefactNotFoundError)
+    assert caught.value.ref == REF + '@v2'
+
+
+def test_listing_new_error_words(http, client):
+    http.queue(make_response(422, {'status': 'invalid_group_id', 'message': 'no'}),
+               make_response(422, {'status': 'invalid_limit', 'message': 'no'}))
+    with pytest.raises(ArtefactError) as caught:
+        client.list_artefacts(group_id='!!')
+    assert caught.value.status == 'invalid_group_id'
+    with pytest.raises(ArtefactError) as caught:
+        client.list_artefacts(limit=500)
+    assert caught.value.status == 'invalid_limit'
 
 
 def test_signed_link_failure_hides_signature(http, client):
@@ -421,7 +447,7 @@ def test_download_artefact_selected_files(http, client, tmp_path):
 
 def test_download_artefact_unknown_selected_file(http, client, tmp_path):
     http.queue(make_response(200, version_payload([file_entry('a.png', FIGURE)])))
-    with pytest.raises(ArtefactNotFoundError):
+    with pytest.raises(ArtefactFileNotFoundError):
         client.download_artefact(REF, tmp_path, files=['nope.png'])
 
 
@@ -446,27 +472,90 @@ def test_download_refuses_unsafe_manifest_names(http, client, tmp_path):
 # ── analysis collections ────────────────────────────────────────────────
 
 
-def test_list_analysis_collections(http, client):
+def test_list_collections(http, client):
+    http.queue(make_response(200, {'n_collections': 1, 'collections': [
+        {'group_id': 'AT6', 'collection_kind': 'analysis', 'n_datasets': 0}]}))
+    result = client.list_collections()
+    assert http.last['url'] == f'{BASE}/collections'
+    assert not http.last['params']
+    assert result['n_collections'] == 1
+    client.list_collections(kind='datasets')
+    assert http.last['params'] == {'kind': 'datasets'}
+
+
+def test_list_collections_dataframe_and_invalid_kind(http, client):
+    http.queue(make_response(200, {'n_collections': 2, 'collections': [
+        {'group_id': 'AT6'}, {'group_id': 'S19'}]}),
+        make_response(422, {'status': 'invalid_kind', 'message': 'no'}))
+    assert list(client.list_collections(format='dataframe')['group_id']) == ['AT6', 'S19']
+    with pytest.raises(ArtefactError) as caught:
+        client.list_collections(kind='movies')
+    assert caught.value.status == 'invalid_kind'
+
+
+def test_list_analysis_collections_uses_collections_route(http, client):
+    http.queue(make_response(200, {'n_collections': 1, 'collections': [
+        {'group_id': 'AT6', 'collection_kind': 'analysis'}]}))
+    collections = client.list_analysis_collections()
+    assert [row['group_id'] for row in collections] == ['AT6']
+    assert len(http.calls) == 1
+    assert http.last['url'] == f'{BASE}/collections'
+    assert http.last['params'] == {'kind': 'analysis'}
+
+
+def test_list_analysis_collections_fallback_on_old_server(http, client):
     http.queue(
+        make_response(404, {'detail': 'Not Found'}),
+        make_response(200, {'version': '2.46.3'}),
         make_response(200, {'artefacts': [{'ref': 'AT6/_group/x', 'group_id': 'AT6'},
-                                          {'ref': 'PU1/pub/y', 'group_id': 'PU1'},
-                                          {'ref': 'AT6/_group/z', 'group_id': 'AT6'}],
+                                          {'ref': 'PU1/pub/y', 'group_id': 'PU1'}],
                             'next_cursor': None}),
-        make_response(200, {'group_id': 'AT6', 'collection_kind': 'analysis',
-                            'datasets': []}),
+        make_response(200, {'group_id': 'AT6', 'group': 'Atlas2026',
+                            'collection_kind': 'analysis', 'datasets': [],
+                            'artefacts_count': 1, 'access': 'public'}),
         make_response(200, {'group_id': 'PU1', 'collection_kind': 'datasets',
                             'datasets': [{'db_id': 'PU1/pub'}]}))
     collections = client.list_analysis_collections()
-    assert [row['group_id'] for row in collections] == ['AT6']
-    assert [call['url'] for call in http.calls[1:]] == [
+    assert collections == [{'group_id': 'AT6', 'group': 'Atlas2026', 'title': None,
+                            'collection_kind': 'analysis', 'access': 'public',
+                            'n_datasets': 0, 'artefacts_count': 1,
+                            'authors': None, 'year': None}]
+    assert [call['url'] for call in http.calls] == [
+        f'{BASE}/collections', f'{BASE}/version', f'{BASE}/artefacts',
         f'{BASE}/groups/AT6', f'{BASE}/groups/PU1']
 
 
-def test_list_analysis_collections_skips_404(http, client):
-    http.queue(
-        make_response(200, {'artefacts': [{'group_id': 'NO6'}], 'next_cursor': None}),
-        make_response(404, {'detail': 'No datasets found'}))
-    assert client.list_analysis_collections() == []
+def test_list_analysis_collections_no_fallback_on_new_server(http, client):
+    http.queue(make_response(404, {'detail': 'Not Found'}),
+               make_response(200, {'version': '2.47.0'}))
+    with pytest.raises(ArtefactError):
+        client.list_analysis_collections()
+
+
+# ── purge requests ──────────────────────────────────────────────────────
+
+
+def test_list_artefact_purges(http, client):
+    purge = {'ref': REF, 'version': 1, 'state': 'needs_decision', 'reason': 'wrong',
+             'requested': '2026-10-19', 'updated': '2026-10-19',
+             'requested_by': 'tester', 'detail': 'sha256 differs'}
+    http.queue(make_response(200, {'purges': [purge]}))
+    assert client.list_artefact_purges()['purges'] == [purge]
+    assert http.last['url'] == f'{BASE}/artefacts/purges'
+    assert not http.last['params']
+    client.list_artefact_purges(state='done')
+    assert http.last['params'] == {'state': 'done'}
+
+
+def test_list_artefact_purges_refusals(http, client):
+    http.queue(make_response(422, {'status': 'invalid_state', 'message': 'no'}),
+               make_response(403, {'status': 'forbidden', 'message': 'sign in'}))
+    with pytest.raises(ArtefactError) as caught:
+        client.list_artefact_purges(state='gone')
+    assert caught.value.status == 'invalid_state'
+    with pytest.raises(ArtefactError) as caught:
+        client.list_artefact_purges()
+    assert caught.value.status_code == 403
 
 
 # ── deposits: typed refusals and wait_for_deposit ───────────────────────
@@ -520,3 +609,14 @@ def test_wait_for_deposit_timeout(http, client, monkeypatch):
     http.queue(make_response(200, {'deposit_id': 'd1', 'state': 'checking'}))
     with pytest.raises(TimeoutError):
         client.wait_for_deposit('d1', timeout=0)
+
+
+def test_vocab_caller_rights_pass_through(http, client):
+    caller = {'user': 'tester', 'is_admin': False, 'may_deposit_datasets': False,
+              'may_deposit_artefacts': True, 'may_create_collections': True}
+    http.queue(make_response(200, {'caller': caller, 'artefacts': {
+        'may_deposit_artefacts': True, 'may_create_collections': True}}))
+    vocab = client.get_deposit_vocab()
+    assert vocab['caller'] == caller
+    assert vocab['artefacts']['may_create_collections'] is True
+    assert 'may_deposit_artefacts' in AnthiveClient.get_deposit_vocab.__doc__

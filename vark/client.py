@@ -43,7 +43,8 @@ from ._credentials import (
     find_vark_server_by_name,
 )
 from .exceptions import (AnthiveWarmingUpError, ArtefactDownloadError,
-                         ArtefactError, ArtefactIntegrityError,
+                         ArtefactError, ArtefactFileNotFoundError,
+                         ArtefactIntegrityError,
                          ArtefactNotFoundError, DepositHeldError,
                          DepositStoppedError, ServerWarmingUpWarning,
                          raise_for_artefact_status, raise_for_deposit_status,
@@ -315,7 +316,8 @@ class AnthiveClient:
     :meth:`list_artefacts`, :meth:`get_artefact`,
     :meth:`get_artefact_versions`, :meth:`get_artefact_version`,
     :meth:`get_artefact_preview`, :meth:`download_artefact_file`,
-    :meth:`download_artefact` (sha256 verified) and
+    :meth:`download_artefact` (sha256 verified),
+    :meth:`list_artefact_purges`, :meth:`list_collections` and
     :meth:`list_analysis_collections`. Depositing and purging artefacts
     is ``vark artefacts add`` / ``vark artefacts purge`` (the Go CLI);
     :meth:`wait_for_deposit` follows any deposit until it is live.
@@ -4441,6 +4443,14 @@ class AnthiveClient:
         is_admin, may_replace_de_study, may_list_all_deposits,
         may_update_any_dataset}``).
 
+        REST API 2.47.0+: ``caller`` adds ``may_deposit_datasets``,
+        ``may_deposit_artefacts`` and ``may_create_collections``; an
+        ``artefacts`` block (kinds and their file endings, limits,
+        provenance rules, held reasons, the incoming key, and again
+        ``may_deposit_artefacts`` / ``may_create_collections``) and
+        ``analysis_index_md`` are added. Members of the artefact upload
+        or collection groups may read the vocabulary too.
+
         Raises:
             DatasetDepositError: 403 ``forbidden`` for callers outside
                 ``datasets_upload_groups``.
@@ -4633,7 +4643,8 @@ class AnthiveClient:
 
         Raises:
             ArtefactError: 422 ``invalid_kind``, ``invalid_db_id``,
-                ``invalid_limit``, ``invalid_cursor`` or ``invalid``.
+                ``invalid_group_id``, ``invalid_limit``,
+                ``invalid_cursor`` or ``invalid``.
         """
         params: Dict[str, Any] = {'limit': limit}
         for key, value in (('db_id', db_id), ('group_id', group_id),
@@ -4918,7 +4929,9 @@ class AnthiveClient:
             The bytes, or the :class:`~pathlib.Path` written.
 
         Raises:
-            ArtefactNotFoundError: no such artefact, version or file.
+            ArtefactFileNotFoundError: the version has no such file
+                (404 ``file_not_found``; checked before the download).
+            ArtefactNotFoundError: no such artefact or version.
             ArtefactNotOnThisSiteError: 404 ``not_on_this_site``.
             ArtefactIntegrityError: 502 ``integrity_error``, or the
                 received bytes differ from the manifest.
@@ -4934,10 +4947,10 @@ class AnthiveClient:
         if entry is None:
             names = ', '.join(item.get('name', '?')
                               for item in payload.get('files') or [])
-            raise ArtefactNotFoundError(
+            raise ArtefactFileNotFoundError(
                 f"{payload.get('ref')} has no file {name!r} (files: "
                 f"{names or 'none'})", status_code=404,
-                body={'status': 'not_found', 'ref': payload.get('ref'),
+                body={'status': 'file_not_found', 'ref': payload.get('ref'),
                       'file': name})
         target: Optional[Path] = None
         if dest is not None:
@@ -4970,8 +4983,10 @@ class AnthiveClient:
             files: Only these file names (default: every file).
             verify: Check size and sha256 (on by default).
             write_manifest: Also write the version's manifest as
-                ``manifest.json`` (``_manifest.json`` when a file of the
-                artefact is called ``manifest.json``).
+                ``manifest.json``. The server refuses deposits with a
+                top-level file of that name (API 2.47.0); for an older
+                artefact that has one, the manifest goes to
+                ``_manifest.json``.
             timeout: Seconds to wait for each read (default the client
                 timeout); it is not a limit on the whole download.
 
@@ -4980,8 +4995,9 @@ class AnthiveClient:
             always that) when ``write_manifest``.
 
         Raises:
-            ArtefactNotFoundError: no such artefact or version, or a
-                name in ``files`` that the version does not have.
+            ArtefactNotFoundError: no such artefact or version.
+            ArtefactFileNotFoundError: a name in ``files`` that the
+                version does not have.
             ArtefactIntegrityError: a file differs from the manifest
                 (files already written stay; the bad one is removed).
             ArtefactError: the other refusals of
@@ -4996,11 +5012,11 @@ class AnthiveClient:
             known = {item.get('name') for item in entries}
             missing = [name for name in wanted if name not in known]
             if missing:
-                raise ArtefactNotFoundError(
+                raise ArtefactFileNotFoundError(
                     f"{payload.get('ref')} has no file(s) "
                     f"{', '.join(map(repr, missing))}", status_code=404,
-                    body={'status': 'not_found', 'ref': payload.get('ref'),
-                          'file': missing[0]})
+                    body={'status': 'file_not_found',
+                          'ref': payload.get('ref'), 'file': missing[0]})
             entries = [item for item in entries if item.get('name') in wanted]
         folder = Path(dest)
         folder.mkdir(parents=True, exist_ok=True)
@@ -5021,31 +5037,66 @@ class AnthiveClient:
             written['manifest.json'] = manifest_path
         return written
 
-    def list_analysis_collections(self, scan_datasets: bool = False
-                                  ) -> List[Dict]:
-        """Analysis collections you may see (REST API 2.47.0+).
+    def list_collections(self, kind: Optional[str] = None,
+                         format: str = 'json') -> Union[Dict, Any]:
+        """``GET /collections``. Every collection you may see, ordered by
+        group id (REST API 2.47.0+).
 
-        An analysis collection (``collection_kind: analysis``) holds
-        artefacts that belong to no single dataset, such as cross-study
-        figures. The API has no route that lists collections, so this
-        collects the group ids of every visible artefact (and, with
-        ``scan_datasets``, of every served dataset), asks
-        :meth:`get_group` for each and keeps those whose
-        ``collection_kind`` is ``analysis``.
-
-        An analysis collection with no visible artefact (and, with
-        ``scan_datasets``, no dataset) cannot be found this way.
+        Returns ``{n_collections, collections}``; each collection has
+        ``group_id``, ``group`` (folder name), ``title``,
+        ``collection_kind`` (``datasets`` or ``analysis``), ``access``,
+        ``n_datasets``, ``artefacts_count``, ``authors`` and ``year``.
+        A dataset collection is listed when you see at least one of its
+        datasets (``n_datasets`` counts those; ``access`` is ``public``
+        when all of them are). An analysis collection holds artefacts
+        that belong to no single dataset; it is listed by the ``access``
+        of its ``index.md``, so internal ones need a sign-in.
 
         Args:
-            scan_datasets: Also check the collections of served
-                datasets (one more request per collection).
+            kind: ``'datasets'`` or ``'analysis'``; sent only when given.
+            format: ``'json'`` (the dict) or ``'dataframe'`` (one row
+                per collection; needs pandas).
+
+        Raises:
+            ArtefactError: 422 ``invalid_kind``.
+        """
+        result = self._artefact_get(
+            '/collections', {'kind': kind} if kind is not None else None)
+        if format == 'dataframe':
+            import pandas as pd
+            return pd.DataFrame(result.get('collections') or [])
+        if format != 'json':
+            raise ValueError(
+                f"format must be 'json' or 'dataframe', got {format!r}")
+        return result
+
+    def list_analysis_collections(self, scan_datasets: bool = False
+                                  ) -> List[Dict]:
+        """Analysis collections you may see (REST API 2.47.0+):
+        ``list_collections(kind='analysis')['collections']``.
+
+        Only when the server has no ``/collections`` route (404) and its
+        ``/version`` is older than 2.47.0, this falls back to asking
+        :meth:`get_group` for the group id of every visible artefact
+        (and, with ``scan_datasets``, of every served dataset); that
+        misses analysis collections without artefacts. The fallback
+        rows have the same keys as :meth:`list_collections`.
+
+        Args:
+            scan_datasets: Fallback only: also check the collections of
+                served datasets (one request per collection).
 
         Returns:
-            The :meth:`get_group` dicts (``group_id``, ``group``,
-            ``title``, ``access``, ``authors``, ``year``,
-            ``description``, ``datasets``, ``artefacts_count``,
-            ``collection_kind``), sorted by ``group_id``.
+            The collection rows of :meth:`list_collections`, sorted by
+            ``group_id``.
         """
+        try:
+            return list(self.list_collections(kind='analysis')
+                        .get('collections') or [])
+        except ArtefactError as exc:
+            if exc.status_code != 404 or not self._server_older_than(
+                    (2, 47, 0)):
+                raise
         listing = self.list_artefacts(limit=200, all_pages=True)
         group_ids = {row.get('group_id')
                      for row in listing.get('artefacts') or []
@@ -5064,8 +5115,46 @@ class AnthiveClient:
                     continue
                 raise
             if group.get('collection_kind') == 'analysis':
-                collections.append(group)
+                collections.append({
+                    'group_id': group_id, 'group': group.get('group'),
+                    'title': group.get('title'),
+                    'collection_kind': 'analysis',
+                    'access': group.get('access'),
+                    'n_datasets': len(group.get('datasets') or []),
+                    'artefacts_count': group.get('artefacts_count'),
+                    'authors': group.get('authors'),
+                    'year': group.get('year')})
         return collections
+
+    def _server_older_than(self, version: Tuple[int, int, int]) -> bool:
+        """Whether the server's ``/version`` is older than ``version``
+        (an unparseable or missing version counts as older)."""
+        text = str(self.get_version().get('version') or '')
+        match = re.match(r'(\d+)\.(\d+)\.(\d+)', text)
+        if not match:
+            return True
+        return tuple(int(part) for part in match.groups()) < version
+
+    def list_artefact_purges(self, state: Optional[str] = None) -> Dict:
+        """``GET /artefacts/purges``. Your purge requests, newest first;
+        admins see everyone's (REST API 2.47.0+).
+
+        Returns ``{purges}``; each is ``{ref, version, state, reason,
+        requested, updated, requested_by, detail}``. ``state`` is
+        ``requested``, ``purging``, ``done``, ``needs_decision`` or
+        ``failed``; ``detail`` says why a request needs a decision.
+        Purges are requested with the Go CLI (``vark artefacts purge``).
+
+        Args:
+            state: Only requests in this state; sent only when given.
+
+        Raises:
+            ArtefactError: 403 without a sign-in (``status``
+                ``forbidden``), 422 ``invalid_state``.
+        """
+        return self._artefact_get(
+            '/artefacts/purges',
+            {'state': state} if state is not None else None)
 
     # ── Plot cache admin ────────────────────────────────────────────────
 

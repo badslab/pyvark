@@ -82,8 +82,10 @@ class DatasetDepositError(AnthiveAPIError):
 
 
 class DepositNotOwnerError(DatasetDepositError):
-    """403 ``not_owner``: a new version of an artefact is deposited by
-    its owner or an admin only (REST API 2.47.0+)."""
+    """403 ``not_owner`` (REST API 2.47.0+): a new version of an
+    artefact is deposited by its owner or an admin only, and a
+    ``de_table`` (or ``de_only``) deposit needs the right to update its
+    dataset (admin, update policy ``any``, or the dataset's owner)."""
 
 
 class DepositQuotaError(DatasetDepositError):
@@ -167,6 +169,13 @@ class ArtefactError(AnthiveAPIError):
 class ArtefactNotFoundError(ArtefactError):
     """404 ``not_found``: no such artefact, version or file, or one the
     caller may not see (the server does not tell them apart)."""
+
+
+class ArtefactFileNotFoundError(ArtefactNotFoundError):
+    """404 ``file_not_found``: the artefact version exists but has no
+    file of that name (REST API 2.47.0; ``ref`` names the version and
+    ``file`` the name). pyvark's download methods also raise it before
+    any request when the manifest has no such file."""
 
 
 class ArtefactNotOnThisSiteError(ArtefactError):
@@ -359,6 +368,7 @@ _DEPOSIT_ERRORS_BY_WORD = {
 
 _ARTEFACT_ERRORS_BY_WORD = {
     'not_found': ArtefactNotFoundError,
+    'file_not_found': ArtefactFileNotFoundError,
     'not_on_this_site': ArtefactNotOnThisSiteError,
     'purged': ArtefactPurgedError,
     'purging': ArtefactPurgingError,
