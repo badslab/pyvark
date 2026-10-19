@@ -4,8 +4,9 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.46.0** (read-only dataset
-deposit status for depositors and admins, facet tests with
+API surface verified against **REST API 2.47.0** (read-only artefact
+store: listing, versions, provenance and verified downloads; read-only
+dataset deposit status for depositors and admins, facet tests with
 facet scopes, replication with an effect gate and forest rows, module
 replication, per-donor values and plots, donor variability, gene set
 ranks, gene detection, donor groups, exclude_secondary, replicate
@@ -41,13 +42,17 @@ from ._credentials import (
     find_vark_credentials_for,
     find_vark_server_by_name,
 )
-from .exceptions import (AnthiveWarmingUpError, ServerWarmingUpWarning,
-                         raise_for_deposit_status, raise_for_upload_status)
+from .exceptions import (AnthiveWarmingUpError, ArtefactDownloadError,
+                         ArtefactError, ArtefactIntegrityError,
+                         ArtefactNotFoundError, DepositHeldError,
+                         DepositStoppedError, ServerWarmingUpWarning,
+                         raise_for_artefact_status, raise_for_deposit_status,
+                         raise_for_upload_status)
 
 _LOG = logging.getLogger('vark')
 
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __all__ = ["AnthiveClient", "VarkConfigError"]
 
 
@@ -154,6 +159,44 @@ def _filename_from_disposition(header: str) -> Optional[str]:
     from urllib.parse import unquote
     name = Path(unquote(match.group(1).strip())).name
     return name or None
+
+
+# ── Artefact references and file names (REST API 2.47.0+) ────────────────────
+
+#: ``<group_id>/<scope>/<artefact_id>[@v<N>|@latest]``, the server's rules
+#: (lib/artefacts.py: GROUP_ID_RE, SEGMENT_RE, ARTEFACT_ID_RE).
+_ARTEFACT_REF_RE = re.compile(
+    r'(?P<group_id>[A-Za-z0-9]{3})/'
+    r'(?P<scope>_group|[A-Za-z0-9][A-Za-z0-9._-]{0,63})/'
+    r'(?P<artefact_id>[a-z0-9][a-z0-9-]{1,63})'
+    r'(?:@(?P<version>v[1-9][0-9]{0,5}|latest))?')
+_ARTEFACT_VERSION_RE = re.compile(r'v[1-9][0-9]{0,5}|latest')
+#: one segment of an artefact file name (at most one subfolder)
+_ARTEFACT_FILE_SEGMENT_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,119}')
+#: deposit states after which :meth:`AnthiveClient.wait_for_deposit` stops
+_DEPOSIT_STOPPED_STATES = frozenset({'failed', 'needs_decision', 'rejected',
+                                     'withdrawn', 'expired', 'superseded'})
+
+
+def _check_file_name(name: str) -> List[str]:
+    """The segments of a manifest file name; ValueError for a name that
+    is not one or two safe segments (never ``..``, never absolute)."""
+    parts = name.split('/') if isinstance(name, str) else []
+    if not 1 <= len(parts) <= 2 or not all(
+            _ARTEFACT_FILE_SEGMENT_RE.fullmatch(part) for part in parts):
+        raise ValueError(f"unsafe artefact file name {name!r}")
+    return parts
+
+
+def _quote_file_name(name: str) -> str:
+    """URL path of a file name (segments quoted, ``/`` kept)."""
+    from urllib.parse import quote
+    return '/'.join(quote(part, safe='') for part in _check_file_name(name))
+
+
+def _safe_join(folder: Path, name: str) -> Path:
+    """``folder / name`` for a checked file name (stays inside folder)."""
+    return folder.joinpath(*_check_file_name(name))
 
 
 def _metadata_to_text(metadata: Union[Mapping[str, Any], str, Path], *,
@@ -267,6 +310,16 @@ class AnthiveClient:
     :meth:`get_deposit_group`), for members of the site's
     ``datasets_upload_groups``.
 
+    Artefact store (REST API 2.47.0+): versioned, immutable analysis
+    files of a dataset or a collection, read with
+    :meth:`list_artefacts`, :meth:`get_artefact`,
+    :meth:`get_artefact_versions`, :meth:`get_artefact_version`,
+    :meth:`get_artefact_preview`, :meth:`download_artefact_file`,
+    :meth:`download_artefact` (sha256 verified) and
+    :meth:`list_analysis_collections`. Depositing and purging artefacts
+    is ``vark artefacts add`` / ``vark artefacts purge`` (the Go CLI);
+    :meth:`wait_for_deposit` follows any deposit until it is live.
+
     Admin-only methods (403 for other signed-in users, 2.45.0+):
     :meth:`rescan_databases`, :meth:`rescan_genesets`,
     :meth:`rescan_module_variability`, :meth:`rescan_catalogs`,
@@ -292,7 +345,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.46.0"
+    API_TARGET = "2.47.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.
@@ -4409,6 +4462,601 @@ class AnthiveClient:
         return self._deposit_get(
             f'/datasets/deposit/groups/{data_project}',
             {'basename': basename} if basename is not None else None)
+
+    def wait_for_deposit(self, deposit_id: str, timeout: float = 1800.0,
+                         poll_interval: float = 15.0) -> Dict:
+        """Poll :meth:`get_deposit` until the deposit is published.
+
+        Works for every deposit kind (dataset, ``de_only``, artefact,
+        collection). The deposit itself is made with the Go CLI
+        (``vark datasets upload``, ``vark artefacts add``).
+
+        Args:
+            deposit_id: The deposit.
+            timeout: Seconds to wait in total.
+            poll_interval: Seconds between status requests (at least 1).
+
+        Returns:
+            The status dict of :meth:`get_deposit` once ``state`` is
+            ``live``. For an artefact deposit ``artefact.ref_version``
+            names the published version.
+
+        Raises:
+            DepositHeldError: ``state`` became ``held`` (waits for an
+                admin; ``held_reasons`` says why).
+            DepositStoppedError: ``state`` became ``failed``,
+                ``needs_decision``, ``rejected``, ``withdrawn``,
+                ``expired`` or ``superseded``.
+            DatasetDepositError: the status request was refused.
+            TimeoutError: still in progress after ``timeout`` seconds.
+        """
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        pause = max(float(poll_interval), 1.0)
+        while True:
+            deposit = self.get_deposit(deposit_id)
+            state = str(deposit.get('state') or '')
+            if state == 'live':
+                return deposit
+            if state == 'held':
+                reasons = ', '.join(deposit.get('held_reasons') or []) or '-'
+                raise DepositHeldError(
+                    f"deposit {deposit_id} is held for an admin "
+                    f"(reasons: {reasons})", deposit=deposit)
+            if state in _DEPOSIT_STOPPED_STATES:
+                error = deposit.get('error') or ''
+                raise DepositStoppedError(
+                    f"deposit {deposit_id} ended in state {state!r}"
+                    + (f": {error}" if error else ''), deposit=deposit)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"deposit {deposit_id} is still {state!r} after "
+                    f"{float(timeout):g} s")
+            time.sleep(min(pause, remaining))
+
+    # ── Artefact store, read-only (REST API 2.47.0+) ─────────────────────
+    #
+    # Versioned, immutable analysis files of a dataset or a collection.
+    # A reference is ``<group_id>/<scope>/<artefact_id>[@v<N>]``; the
+    # scope is the dataset's file id (``SLM`` of ``S26/SLM``) or
+    # ``_group`` for the collection. Without ``@v<N>`` it means the
+    # latest live version. Depositing and purging are done with the Go
+    # CLI (``vark artefacts add`` / ``vark artefacts purge``); pyvark
+    # only reads. Errors raise :class:`ArtefactError` subclasses.
+
+    @staticmethod
+    def parse_artefact_ref(ref: str) -> Tuple[str, str, str, Optional[str]]:
+        """Split an artefact reference.
+
+        Args:
+            ref: ``<group_id>/<scope>/<artefact_id>``, optionally with
+                ``@v<N>`` or ``@latest``.
+
+        Returns:
+            ``(group_id, scope, artefact_id, version)``; ``version`` is
+            ``'v<N>'``, ``'latest'`` or ``None`` (not given).
+
+        Raises:
+            ValueError: the reference is malformed.
+        """
+        match = _ARTEFACT_REF_RE.fullmatch(ref.strip()) if isinstance(
+            ref, str) else None
+        if not match:
+            raise ValueError(
+                f"invalid artefact reference {ref!r}; expected "
+                f"<group_id>/<scope>/<artefact_id>[@v<N>], e.g. "
+                f"S26/SLM/umap-microglia@v2")
+        return (match.group('group_id'), match.group('scope'),
+                match.group('artefact_id'), match.group('version'))
+
+    def _artefact_base(self, ref: str) -> Tuple[str, Optional[str]]:
+        """``('/artefacts/G/S/id', version_or_None)`` for a reference."""
+        group_id, scope, artefact_id, version = self.parse_artefact_ref(ref)
+        return f'/artefacts/{group_id}/{scope}/{artefact_id}', version
+
+    @staticmethod
+    def _version_label(version: Union[int, str, None],
+                       from_ref: Optional[str]) -> str:
+        """The ``v<N>`` / ``latest`` path segment; an explicit
+        ``version`` must agree with one in the reference."""
+        if version is None:
+            return from_ref or 'latest'
+        label = f'v{version}' if isinstance(version, int) else str(version)
+        if not _ARTEFACT_VERSION_RE.fullmatch(label):
+            raise ValueError(
+                f"invalid artefact version {version!r}; use an int, "
+                f"'v<N>' or 'latest'")
+        if from_ref is not None and from_ref != label:
+            raise ValueError(
+                f"the reference names {from_ref} but version={version!r}")
+        return label
+
+    def _artefact_get(self, path: str,
+                      params: Optional[Dict[str, Any]] = None) -> Dict:
+        """GET an artefact route; non-2xx raises an ArtefactError."""
+        response = self._request('GET', path, params=params)
+        raise_for_artefact_status(response)
+        return response.json()
+
+    def list_artefacts(self,
+                       db_id: Optional[str] = None,
+                       group_id: Optional[str] = None,
+                       kind: Optional[str] = None,
+                       q: Optional[str] = None,
+                       owner: Optional[str] = None,
+                       include_purged: bool = False,
+                       limit: int = 50,
+                       cursor: Optional[str] = None,
+                       all: bool = False,
+                       *,
+                       all_pages: bool = False,
+                       format: str = 'json') -> Union[Dict, Any]:
+        """``GET /artefacts``. Artefacts you may see, ordered by
+        reference (REST API 2.47.0+).
+
+        Returns ``{artefacts, next_cursor}``. Each summary has ``ref``,
+        ``artefact_id``, ``kind``, ``group_id``, ``scope``, ``db_id``
+        (``None`` for a collection artefact), ``title``, ``latest``
+        (number of the latest live version, ``None`` when every version
+        is purged), ``versions_live``, ``owner`` ("a member" without a
+        sign-in), ``updated``, ``size_bytes``, ``main_file``,
+        ``preview`` and ``path`` (API paths) and ``access``
+        (``inherit`` or ``internal``).
+
+        Args:
+            db_id: Only artefacts of this dataset (``S26/SLM``).
+            group_id: Only artefacts of this collection, every scope.
+            kind: ``de_table``, ``figure``, ``table``, ``notebook``,
+                ``report``, ``model`` or ``other``.
+            q: Text in the id, title or description.
+            owner: Only artefacts owned by this login (needs a sign-in;
+                anonymous callers get 422).
+            include_purged: Also artefacts whose every version is purged.
+            limit: Page size, 1 to 200.
+            cursor: ``next_cursor`` of the previous page.
+            all: Admins: also artefacts of inactive or removed datasets
+                (ignored for others).
+            all_pages: Follow ``next_cursor`` and return every page in
+                one ``artefacts`` list (``next_cursor`` is then
+                ``None``).
+            format: ``'json'`` (the dict) or ``'dataframe'`` (one row
+                per artefact; needs pandas).
+
+        Raises:
+            ArtefactError: 422 ``invalid_kind``, ``invalid_db_id``,
+                ``invalid_limit``, ``invalid_cursor`` or ``invalid``.
+        """
+        params: Dict[str, Any] = {'limit': limit}
+        for key, value in (('db_id', db_id), ('group_id', group_id),
+                           ('kind', kind), ('q', q), ('owner', owner),
+                           ('cursor', cursor)):
+            if value is not None:
+                params[key] = value
+        if include_purged:
+            params['include_purged'] = 'true'
+        if all:
+            params['all'] = 'true'
+        result = self._artefact_get('/artefacts', params)
+        if all_pages:
+            rows = list(result.get('artefacts') or [])
+            seen = set()
+            while result.get('next_cursor'):
+                next_cursor = result['next_cursor']
+                if next_cursor in seen:  # a server bug must not loop forever
+                    raise RuntimeError(
+                        f"GET /artefacts returned the cursor {next_cursor!r} "
+                        f"twice")
+                seen.add(next_cursor)
+                result = self._artefact_get(
+                    '/artefacts', {**params, 'cursor': next_cursor})
+                rows.extend(result.get('artefacts') or [])
+            result = {'artefacts': rows, 'next_cursor': None}
+        if format == 'dataframe':
+            import pandas as pd
+            return pd.DataFrame(result.get('artefacts') or [])
+        if format != 'json':
+            raise ValueError(
+                f"format must be 'json' or 'dataframe', got {format!r}")
+        return result
+
+    def get_artefact(self, ref: str,
+                     version: Union[int, str, None] = None) -> Dict:
+        """``GET /artefacts/{group_id}/{scope}/{artefact_id}``. One
+        artefact with its versions and its latest live manifest (REST
+        API 2.47.0+).
+
+        Without a version (none in ``ref`` and ``version=None``) this
+        returns the summary of :meth:`list_artefacts` plus ``created``,
+        ``versions`` (``[{version, state, published, purged?}]``,
+        ``state`` ``live``, ``purging``, ``purged`` or ``unavailable``),
+        ``manifest`` (schema ``anthive.artefact/1``, or ``None``) and
+        ``files`` (``[{name, size, sha256, content_type, role,
+        download, preview}]``; ``download`` and ``preview`` are API
+        paths, never signed URLs).
+
+        With a version it returns :meth:`get_artefact_version` instead
+        (``{ref, version, state, latest, manifest, files}``).
+
+        Provenance is in ``manifest``: ``made_from`` (``[{db_id,
+        dataset_version, h5ad_sha256}]``; a dataset you may not see
+        comes back as ``{db_id: None, ..., hidden: "made from a dataset
+        you cannot see"}``), ``declared`` (author, created, software,
+        code, parameters, as the depositor stated them) and
+        ``recorded`` (what the server recorded: uploader, publication
+        time, checks, approval). A de_table manifest has a ``de`` block
+        (per table study id, rows, genes matched, sign convention, and
+        ``imported``).
+
+        Args:
+            ref: ``<group_id>/<scope>/<artefact_id>[@v<N>]``.
+            version: ``3``, ``'v3'`` or ``'latest'``; overrides nothing,
+                must agree with a version in ``ref``.
+
+        Raises:
+            ArtefactNotFoundError: 404 (also for an artefact you may not
+                see).
+            ArtefactPurgedError: 410, a purged version was asked.
+            ArtefactPurgingError: 409, that version is being purged.
+            ValueError: malformed reference or version.
+        """
+        base, from_ref = self._artefact_base(ref)
+        if version is None and from_ref is None:
+            return self._artefact_get(base)
+        return self._artefact_get(
+            f'{base}/{self._version_label(version, from_ref)}')
+
+    def get_artefact_versions(self, ref: str) -> Dict:
+        """``GET /artefacts/{group_id}/{scope}/{artefact_id}/versions``.
+        Every version, purged ones as tombstones (REST API 2.47.0+).
+
+        Returns ``{ref, latest, versions}``; a live version is
+        ``{version, state, published}``, a purged one ``{version,
+        state: "purged", published, purged, purged_by,
+        purge_reason}``. ``purged_by`` reads "an admin" for non-admins
+        when an admin purged; anonymous callers see no purge reason.
+
+        Args:
+            ref: ``<group_id>/<scope>/<artefact_id>`` (a ``@v<N>`` is
+                ignored).
+
+        Raises:
+            ArtefactNotFoundError: 404.
+        """
+        base, _version = self._artefact_base(ref)
+        return self._artefact_get(f'{base}/versions')
+
+    def get_artefact_version(self, ref: str,
+                             version: Union[int, str, None] = None) -> Dict:
+        """``GET /artefacts/{group_id}/{scope}/{artefact_id}/{version}``.
+        One version (REST API 2.47.0+).
+
+        Returns ``{ref, version, state, latest, manifest, files}``;
+        ``ref`` carries ``@v<N>``. ``files`` is as in
+        :meth:`get_artefact`.
+
+        Args:
+            ref: The reference; its ``@v<N>`` is used when ``version``
+                is ``None``, else ``latest``.
+            version: ``3``, ``'v3'`` or ``'latest'``.
+
+        Raises:
+            ArtefactNotFoundError: 404, no such version.
+            ArtefactPurgedError: 410 with ``tombstone``.
+            ArtefactPurgingError: 409.
+        """
+        base, from_ref = self._artefact_base(ref)
+        return self._artefact_get(
+            f'{base}/{self._version_label(version, from_ref)}')
+
+    def get_artefact_preview(self, ref: str, name: str,
+                             version: Union[int, str, None] = None
+                             ) -> bytes:
+        """``GET .../{version}/preview/{name}``. The server-generated
+        preview of one file: ``<file>.webp`` for figures, ``<file>.txt``
+        (first lines) for tables (REST API 2.47.0+). The ``preview``
+        field of a file in :meth:`get_artefact` says whether one exists.
+
+        Args:
+            ref: The reference.
+            name: ``<file name>.webp`` or ``<file name>.txt``.
+            version: As in :meth:`get_artefact_version`.
+
+        Raises:
+            ArtefactNotFoundError: 404, no such preview on this site.
+        """
+        base, from_ref = self._artefact_base(ref)
+        label = self._version_label(version, from_ref)
+        response = self._request(
+            'GET', f'{base}/{label}/preview/{_quote_file_name(name)}')
+        raise_for_artefact_status(response)
+        return response.content
+
+    def _artefact_file_response(self, path: str, *, stream: bool,
+                                timeout: Optional[float]
+                                ) -> 'requests.Response':
+        """GET a file route; follow the 307 to the signed S3 link
+        WITHOUT the API's credentials and headers."""
+        response = self._request('GET', path, stream=stream,
+                                 timeout=timeout, allow_redirects=False)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            if not response.ok:
+                try:
+                    raise_for_artefact_status(response)
+                finally:
+                    response.close()
+            return response
+        location = response.headers.get('Location')
+        response.close()
+        if not location:
+            raise ArtefactError(
+                f"{response.status_code} redirect without a Location "
+                f"(url: {response.url})", status_code=response.status_code,
+                body={'status': 'invalid_redirect'})
+        from urllib.parse import urljoin, urlsplit
+        target = urljoin(response.url or f'{self.base_url}{path}', location)
+        signed = requests.get(target, stream=stream, timeout=timeout,
+                              verify=self.verify, allow_redirects=True)
+        if not signed.ok:
+            status = signed.status_code
+            host = urlsplit(target).netloc
+            signed.close()
+            raise ArtefactDownloadError(
+                f"{status} the signed download link on {host} failed "
+                f"(expired or refused); request the file again for a "
+                f"fresh link", status_code=status,
+                body={'status': 'signed_url_failed'})
+        return signed
+
+    @staticmethod
+    def _check_artefact_bytes(name: str, digest: str, size: int,
+                              expected: Mapping[str, Any],
+                              status_code: int) -> None:
+        """Raise ArtefactIntegrityError when size or sha256 differ."""
+        expected_sha = str(expected.get('sha256') or '').lower()
+        expected_size = expected.get('size')
+        if not expected_sha:
+            raise ArtefactIntegrityError(
+                f"{name}: the manifest has no sha256; cannot verify",
+                status_code=status_code, body={'status': 'no_checksum'})
+        if expected_size is not None and int(expected_size) != size:
+            raise ArtefactIntegrityError(
+                f"{name}: received {size} bytes, the manifest says "
+                f"{expected_size}", status_code=status_code,
+                body={'status': 'checksum_mismatch', 'file': name},
+                expected_sha256=expected_sha, actual_sha256=digest)
+        if digest != expected_sha:
+            raise ArtefactIntegrityError(
+                f"{name}: sha256 {digest} differs from the manifest's "
+                f"{expected_sha}", status_code=status_code,
+                body={'status': 'checksum_mismatch', 'file': name},
+                expected_sha256=expected_sha, actual_sha256=digest)
+
+    def _fetch_artefact_file(self, base: str, label: str,
+                             entry: Mapping[str, Any],
+                             target: Optional[Path], verify: bool,
+                             timeout: Optional[float]
+                             ) -> Union[bytes, Path]:
+        """Download one manifest file to ``target`` (or return bytes),
+        verifying size and sha256 when ``verify``."""
+        import hashlib
+        name = str(entry['name'])
+        path = f'{base}/{label}/files/{_quote_file_name(name)}'
+        response = self._artefact_file_response(
+            path, stream=target is not None,
+            timeout=self.timeout if timeout is None else timeout)
+        status_code = response.status_code
+        try:
+            if target is None:
+                content = response.content
+                if verify:
+                    self._check_artefact_bytes(
+                        name, hashlib.sha256(content).hexdigest(),
+                        len(content), entry, status_code)
+                return content
+            target.parent.mkdir(parents=True, exist_ok=True)
+            partial = target.with_name(target.name + '.part')
+            hasher = hashlib.sha256()
+            size = 0
+            try:
+                with open(partial, 'wb') as handle:
+                    for chunk in response.iter_content(chunk_size=1 << 20):
+                        if chunk:
+                            handle.write(chunk)
+                            hasher.update(chunk)
+                            size += len(chunk)
+                if verify:
+                    self._check_artefact_bytes(name, hasher.hexdigest(),
+                                               size, entry, status_code)
+                os.replace(partial, target)
+            except BaseException:
+                partial.unlink(missing_ok=True)
+                raise
+            return target
+        finally:
+            response.close()
+
+    def download_artefact_file(self, ref: str, name: str,
+                               dest: Union[str, Path, None] = None,
+                               version: Union[int, str, None] = None,
+                               verify: bool = True,
+                               timeout: Optional[float] = None
+                               ) -> Union[bytes, Path]:
+        """Download one file of an artefact version (REST API 2.47.0+).
+
+        Reads the version (:meth:`get_artefact_version`) for the file's
+        size and sha256, then ``GET .../{version}/files/{name}``. The
+        server answers 307 to a presigned S3 GET valid a few minutes, or
+        streams a verified local copy. The redirect is followed without
+        your credentials or :attr:`headers`, and the signed URL is never
+        logged or put into an exception (it works for anyone who has it
+        until it expires).
+
+        Args:
+            ref: The reference; ``@v<N>`` picks the version.
+            name: The file's name in the manifest (may hold one
+                subfolder, ``panels/a.png``).
+            dest: ``None`` returns the bytes. A directory saves the file
+                there under its name (subfolder kept); any other path is
+                the target file. The file is written as ``<target>.part``
+                and renamed once verified.
+            version: ``3``, ``'v3'`` or ``'latest'``.
+            verify: Check size and sha256 against the manifest (on by
+                default). A mismatch removes the partial file.
+            timeout: Seconds to wait for each read (default the client
+                timeout); it is not a limit on the whole download.
+
+        Returns:
+            The bytes, or the :class:`~pathlib.Path` written.
+
+        Raises:
+            ArtefactNotFoundError: no such artefact, version or file.
+            ArtefactNotOnThisSiteError: 404 ``not_on_this_site``.
+            ArtefactIntegrityError: 502 ``integrity_error``, or the
+                received bytes differ from the manifest.
+            ArtefactStorageUnavailableError: 503, retry later.
+            ArtefactRateLimitedError: 429, retry after ``retry_after``.
+            ArtefactDownloadError: the signed link failed (expired).
+        """
+        base, from_ref = self._artefact_base(ref)
+        payload = self.get_artefact_version(ref, version)
+        label = f"v{payload['version']}"
+        entry = next((item for item in payload.get('files') or []
+                      if item.get('name') == name), None)
+        if entry is None:
+            names = ', '.join(item.get('name', '?')
+                              for item in payload.get('files') or [])
+            raise ArtefactNotFoundError(
+                f"{payload.get('ref')} has no file {name!r} (files: "
+                f"{names or 'none'})", status_code=404,
+                body={'status': 'not_found', 'ref': payload.get('ref'),
+                      'file': name})
+        target: Optional[Path] = None
+        if dest is not None:
+            target = Path(dest)
+            if target.is_dir():
+                target = _safe_join(target, name)
+        return self._fetch_artefact_file(base, label, entry, target,
+                                         verify, timeout)
+
+    def download_artefact(self, ref: str, dest: Union[str, Path],
+                          version: Union[int, str, None] = None,
+                          files: Optional[Sequence[str]] = None,
+                          verify: bool = True,
+                          write_manifest: bool = True,
+                          timeout: Optional[float] = None
+                          ) -> Dict[str, Path]:
+        """Download the files of an artefact version into a folder
+        (REST API 2.47.0+), the way ``vark artefacts get`` does.
+
+        One version is read first, so every file comes from the same
+        version even when a new one is published meanwhile. Files are
+        written under their manifest names (one subfolder allowed), each
+        verified against the manifest's size and sha256.
+
+        Args:
+            ref: The reference; ``@v<N>`` picks the version, else the
+                latest live one.
+            dest: Target folder (created when missing).
+            version: ``3``, ``'v3'`` or ``'latest'``.
+            files: Only these file names (default: every file).
+            verify: Check size and sha256 (on by default).
+            write_manifest: Also write the version's manifest as
+                ``manifest.json`` (``_manifest.json`` when a file of the
+                artefact is called ``manifest.json``).
+            timeout: Seconds to wait for each read (default the client
+                timeout); it is not a limit on the whole download.
+
+        Returns:
+            ``{file name: Path}``, plus ``'manifest.json'`` (the key is
+            always that) when ``write_manifest``.
+
+        Raises:
+            ArtefactNotFoundError: no such artefact or version, or a
+                name in ``files`` that the version does not have.
+            ArtefactIntegrityError: a file differs from the manifest
+                (files already written stay; the bad one is removed).
+            ArtefactError: the other refusals of
+                :meth:`download_artefact_file`.
+        """
+        base, _from_ref = self._artefact_base(ref)
+        payload = self.get_artefact_version(ref, version)
+        label = f"v{payload['version']}"
+        entries = list(payload.get('files') or [])
+        if files is not None:
+            wanted = list(files)
+            known = {item.get('name') for item in entries}
+            missing = [name for name in wanted if name not in known]
+            if missing:
+                raise ArtefactNotFoundError(
+                    f"{payload.get('ref')} has no file(s) "
+                    f"{', '.join(map(repr, missing))}", status_code=404,
+                    body={'status': 'not_found', 'ref': payload.get('ref'),
+                          'file': missing[0]})
+            entries = [item for item in entries if item.get('name') in wanted]
+        folder = Path(dest)
+        folder.mkdir(parents=True, exist_ok=True)
+        written: Dict[str, Path] = {}
+        for entry in entries:
+            name = str(entry['name'])
+            written[name] = self._fetch_artefact_file(
+                base, label, entry, _safe_join(folder, name), verify,
+                timeout)
+        if write_manifest:
+            names = {str(item.get('name')) for item in payload.get('files') or []}
+            manifest_name = ('_manifest.json' if 'manifest.json' in names
+                             else 'manifest.json')
+            manifest_path = folder / manifest_name
+            manifest_path.write_text(
+                _json.dumps(payload.get('manifest'), indent=2,
+                            sort_keys=True) + '\n', encoding='utf-8')
+            written['manifest.json'] = manifest_path
+        return written
+
+    def list_analysis_collections(self, scan_datasets: bool = False
+                                  ) -> List[Dict]:
+        """Analysis collections you may see (REST API 2.47.0+).
+
+        An analysis collection (``collection_kind: analysis``) holds
+        artefacts that belong to no single dataset, such as cross-study
+        figures. The API has no route that lists collections, so this
+        collects the group ids of every visible artefact (and, with
+        ``scan_datasets``, of every served dataset), asks
+        :meth:`get_group` for each and keeps those whose
+        ``collection_kind`` is ``analysis``.
+
+        An analysis collection with no visible artefact (and, with
+        ``scan_datasets``, no dataset) cannot be found this way.
+
+        Args:
+            scan_datasets: Also check the collections of served
+                datasets (one more request per collection).
+
+        Returns:
+            The :meth:`get_group` dicts (``group_id``, ``group``,
+            ``title``, ``access``, ``authors``, ``year``,
+            ``description``, ``datasets``, ``artefacts_count``,
+            ``collection_kind``), sorted by ``group_id``.
+        """
+        listing = self.list_artefacts(limit=200, all_pages=True)
+        group_ids = {row.get('group_id')
+                     for row in listing.get('artefacts') or []
+                     if row.get('group_id')}
+        if scan_datasets:
+            for row in self.get_databases():
+                db_id = row.get('db_id') if isinstance(row, dict) else None
+                if db_id and '/' in db_id:
+                    group_ids.add(db_id.split('/', 1)[0])
+        collections = []
+        for group_id in sorted(group_ids):
+            try:
+                group = self.get_group(group_id)
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    continue
+                raise
+            if group.get('collection_kind') == 'analysis':
+                collections.append(group)
+        return collections
 
     # ── Plot cache admin ────────────────────────────────────────────────
 
