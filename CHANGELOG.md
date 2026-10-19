@@ -3,7 +3,7 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
-## 0.11.0 (unreleased)
+## 0.11.0 (2026-10-19)
 
 The release that includes 0.10.0 and 0.10.1 (neither was uploaded on
 their own; their entries below are part of 0.11.0). Targets anthive
