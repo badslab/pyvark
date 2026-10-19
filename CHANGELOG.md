@@ -3,6 +3,104 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.12.0 (unreleased)
+
+Targets anthive REST API 2.47 (`API_TARGET` "2.47.0"): the artefact
+store, read side. Checked against ant-serve from the anthive4 branch
+that carries 2.47.0 (unreleased; its `/version` still says 2.46.3).
+Nothing is removed or renamed.
+
+### Added (API 2.47.0)
+
+- Artefact store, read-only. An artefact is a versioned, immutable set
+  of analysis files of one dataset or one collection; its reference is
+  `<group_id>/<scope>/<artefact_id>[@v<N>]`.
+  - `list_artefacts(db_id, group_id, kind, q, owner, include_purged,
+    limit, cursor, all, *, all_pages=False, format='json')`:
+    `GET /artefacts`. `all_pages=True` follows `next_cursor`;
+    `format='dataframe'` gives one row per artefact.
+  - `get_artefact(ref, version=None)`: the detail (summary, `created`,
+    `versions`, the latest live `manifest` with `made_from`, `declared`
+    and `recorded`, and `files`), or one version when the reference or
+    `version` names one.
+  - `get_artefact_versions(ref)`: versions and tombstones.
+  - `get_artefact_version(ref, version=None)`: one version (`v<N>` or
+    `latest`).
+  - `get_artefact_preview(ref, name, version=None)`: the server's WebP
+    or text preview.
+  - `download_artefact_file(ref, name, dest=None, version=None,
+    verify=True)` and `download_artefact(ref, dest, version=None,
+    files=None, verify=True, write_manifest=True)`. The version is read
+    first, so every file comes from that one version. The 307 to the
+    presigned S3 link is followed by hand, without the API credentials
+    and without `headers`; the signed URL never appears in a message or
+    an exception. Size and sha256 are checked against the manifest
+    while streaming into `<file>.part`, which is renamed only once it
+    matches (a mismatch removes it and raises
+    `ArtefactIntegrityError`). `download_artefact` writes the manifest
+    as `manifest.json` (or `_manifest.json` when the artefact has a file
+    of that name), as `vark artefacts get` does. File names from the
+    manifest are checked (one subfolder at most, no `..`, nothing
+    absolute) before anything is written.
+  - `list_analysis_collections(scan_datasets=False)`: collections with
+    `collection_kind: analysis`. The API has no collection listing, so
+    this asks `get_group` for the group id of every visible artefact
+    (and, with `scan_datasets`, of every served dataset). An analysis
+    collection with no visible artefact and no dataset is not found.
+  - `parse_artefact_ref(ref)` (static).
+- `wait_for_deposit(deposit_id, timeout=1800, poll_interval=15)`: polls
+  `get_deposit` until `live`; raises `DepositHeldError` (with
+  `held_reasons`) on `held` and `DepositStoppedError` on `failed`,
+  `needs_decision`, `rejected`, `withdrawn`, `expired` or `superseded`.
+  Works for dataset, DE, artefact and collection deposits made with the
+  Go CLI.
+- Exceptions (all subclasses of `AnthiveAPIError` and
+  `requests.HTTPError`): `ArtefactError` (`status`, `ref`, `file`,
+  `retry_after`) with `ArtefactNotFoundError`,
+  `ArtefactNotOnThisSiteError`, `ArtefactPurgedError` (`tombstone`),
+  `ArtefactPurgingError`, `ArtefactIntegrityError` (also for a
+  client-side checksum mismatch, with `expected_sha256` and
+  `actual_sha256`), `ArtefactStorageUnavailableError`,
+  `ArtefactRateLimitedError` and `ArtefactDownloadError` (the signed
+  link failed, for example after it expired). Deposit answers:
+  `DepositNotOwnerError` (403 `not_owner`), `DepositQuotaError` (413
+  `quota_exceeded`), `DepositHeldError`, `DepositStoppedError`, all
+  subclasses of `DatasetDepositError`, so existing `except` clauses keep
+  working.
+
+### Not in this release
+
+- Depositing artefacts, creating collections and purging versions:
+  pyvark has no deposit write methods (datasets are uploaded with
+  `vark datasets upload`), so these stay with the Go CLI
+  (`vark artefacts add`, `vark collections create`,
+  `vark artefacts purge`). `DepositNotOwnerError` and
+  `DepositQuotaError` are raised only by the deposit read routes today
+  and are there for a later upload release.
+
+### Changed
+
+- `get_group` and `get_database_info` docstrings: the new
+  `collection_kind` and `artefacts_count` fields, and the 200 answer of
+  an analysis collection without datasets (the fields were already
+  passed through).
+- Version assertions in the offline tests now expect 2.47.0.
+
+### Tests
+
+- `tests/test_artefacts_offline.py` (mocked HTTP): paths and
+  parameters, paging, references, the redirect followed without
+  credentials or headers, checksum and size mismatches, unsafe names,
+  the manifest name clash, typed errors, analysis collections and
+  `wait_for_deposit`.
+- `tests/test_integration_artefacts.py`: a throw-away ant-serve from an
+  anthive4 tree (port 18700-18799) with a temporary store built by
+  anthive4's own `tests/artefact_helpers.py` and a fake S3 in the test
+  process: access per caller, paging, tombstones, previews, local and
+  redirected downloads, 502 `integrity_error`, 404 `not_on_this_site`,
+  analysis collections and (with `ANTHIVE_IT_COLLECTION`) a dataset
+  artefact.
+
 ## 0.11.0 (2026-10-19)
 
 The release that includes 0.10.0 and 0.10.1 (neither was uploaded on

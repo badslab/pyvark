@@ -313,6 +313,14 @@ discovery automatically (no filesystem in the browser).
   upload groups): `list_deposits`, `get_deposit`, `get_deposit_report`,
   `get_deposit_vocab`, `get_deposit_group`. Upload datasets with the Go
   CLI: `vark datasets upload`.
+* Artefact store (API 2.47.0, read-only): `list_artefacts`,
+  `get_artefact`, `get_artefact_versions`, `get_artefact_version`,
+  `get_artefact_preview`, `download_artefact_file`, `download_artefact`
+  (sha256 verified) and `list_analysis_collections`; see
+  [Artefacts](#artefacts). Depositing and purging is the Go CLI
+  (`vark artefacts add`, `vark artefacts purge`).
+  `wait_for_deposit` follows any deposit until it is live and raises
+  `DepositHeldError` when it waits for an admin.
 * A server that was just restarted may answer 503 `warming_up` on the
   facet routes (API 2.46.1+). The client waits and retries for up to
   `warmup_max_wait` seconds (default 180, a constructor argument), then
@@ -429,6 +437,51 @@ for outcome in outcomes:
 `upload_papers` records duplicates and invalid records and goes on
 (`stop_on_error=True` re-raises the first one). A 403 or 503 stops the
 whole run at once, since no later paper could succeed either.
+
+## Artefacts
+
+An artefact is a versioned, immutable set of analysis files of one
+dataset or one collection (a DE table, figures, a notebook, a model).
+Its reference is `<group_id>/<scope>/<artefact_id>[@v<N>]`: the scope is
+the dataset's file id (`SMI` of `S19/SMI`) or `_group` for the
+collection. Without `@v<N>` it means the latest live version. A
+published version never changes; a purged one stays as a tombstone.
+
+```python
+from vark import AnthiveClient, ArtefactIntegrityError, ArtefactPurgedError
+
+c = AnthiveClient("https://my.anthive/api")
+
+# What exists for one dataset, or a whole collection (every page).
+rows = c.list_artefacts(db_id="S19/SMI")["artefacts"]
+frame = c.list_artefacts(group_id="AT6", all_pages=True, format="dataframe")
+
+# One artefact: versions, files and the provenance in the manifest.
+detail = c.get_artefact("AT6/_group/atlas-umap")
+detail["versions"]              # [{version, state, published}, ...]
+detail["manifest"]["made_from"]  # datasets and versions it was made from
+detail["manifest"]["declared"]   # author, software, code, as stated
+c.get_artefact_versions("AT6/_group/atlas-umap")  # tombstones too
+
+# Download one version into a folder; every file is checked against
+# the manifest's sha256 and the manifest is written beside the files.
+paths = c.download_artefact("AT6/_group/atlas-umap@v2", "atlas-umap/")
+png = c.download_artefact_file("AT6/_group/atlas-umap", "a.png")  # bytes
+
+# Collections that hold only analyses (no datasets of their own).
+[group["group_id"] for group in c.list_analysis_collections()]
+```
+
+The download route answers with a 307 to a presigned S3 link that
+works for a few minutes, or streams a verified local copy. pyvark
+follows the redirect itself, without your credentials, and keeps the
+signed URL out of logs and exceptions. A file is written as
+`<name>.part` and renamed once its size and sha256 match; otherwise it
+is removed and `ArtefactIntegrityError` is raised. Other refusals have
+their own classes: `ArtefactNotFoundError` (also for an artefact you
+may not see), `ArtefactPurgedError` (with `tombstone`),
+`ArtefactNotOnThisSiteError`, `ArtefactStorageUnavailableError` and
+`ArtefactRateLimitedError` (both with `retry_after`).
 
 ## Donor-level facet tests
 
@@ -660,6 +713,14 @@ ANTHIVE4_SOURCE=/tmp/anthive4-main \
 ANTHIVE_IT_STORE=/path/to/h5adstore \
 uv run --with pytest --with requests --with pandas --no-project \
     python -m pytest tests/test_integration_facets.py -v
+
+# Integration, artefacts: a throw-away ant-serve (API 2.47.0+) on a
+# free port in 18700-18799, a temporary store built with anthive4's
+# tests/artefact_helpers.py and a fake S3 in the test process:
+ANTHIVE4_SOURCE=/path/to/anthive4 \
+ANTHIVE_IT_COLLECTION=/path/to/h5adstore/Sankowski2019 \
+uv run --with pytest --with requests --with pandas --no-project \
+    python -m pytest tests/test_integration_artefacts.py -v
 
 # Live smoke (round-trip):
 ANTHIVE_TEST_URL=https://my.anthive/api \
