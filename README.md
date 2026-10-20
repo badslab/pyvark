@@ -1,96 +1,91 @@
-<p align="center"><img src="https://codeberg.org/mfiers/pyvark/raw/branch/main/doc/logo.png" alt="pyvark" width="200"></p>
+<p align="center"><img src="https://gitlab.kuleuven.be/bdslab/anthive/pyvark/-/raw/main/doc/logo.png" alt="pyvark" width="200"></p>
 
 # pyvark
 
-Python client for the [Anthive](https://codeberg.org/mfiers/anthive4)
-single-cell RNA-seq REST API. Sibling of the Go [`vark`](https://codeberg.org/mfiers/vark)
-CLI — same backend, two front ends.
+pyvark is the Python client for [Anthive](https://gitlab.kuleuven.be/bdslab/anthive/anthive4),
+a browser and REST API for curated single-cell, bulk and spatial
+transcriptomics datasets (mostly human microglia), the papers behind
+them and the analysis files made from them. With pyvark you list
+datasets, read expression and cell metadata, render the server's plots,
+run donor-level facet tests, search the paper library and download
+versioned analysis artefacts, from a script, a notebook or JupyterLite.
+It is the Python sibling of the Go [`vark`](https://codeberg.org/mfiers/vark)
+command line client; both talk to the same API.
 
-API surface verified against **anthive REST API 2.41.0** (2026-10-03).
+The package is called `pyvark` on PyPI and is imported as `vark`.
 
-## Why the dual name?
+## Supported servers
 
-The Go CLI ships as a binary called `vark`. To avoid clobbering it on
-the user's `$PATH` and to keep the PyPI / Codeberg slug obvious, the
-**distribution name** is `pyvark` but the **importable name** is `vark`.
+| pyvark | anthive REST API |
+| --- | --- |
+| 0.12.x | 2.46 and newer; the artefact store and collection listing need 2.47.0+ |
 
-```sh
-pip install pyvark                                    # distribution
-python -c "from vark import AnthiveClient; print('ok')"   # usage
-```
-
-(Both CLI and library live next to each other in the same Anthive setup
-with no shell collision: `vark` = the Go binary, `vark` = the Python
-import.)
+`AnthiveClient.API_TARGET` names the API version a release was checked
+against (0.12.0: 2.47.0). On an older server the methods it does not
+have raise a clear error: artefact and collection calls on a 2.46
+server raise `ServerTooOldError` ("needs anthive REST API 2.47.0+")
+instead of a bare 404. `get_version()["compatible_pyvark"]` tells you
+the oldest pyvark a server works with.
 
 ## Install
 
-From PyPI:
-
 ```sh
-pip install pyvark          # or: uv add pyvark
+pip install pyvark                # or: uv add pyvark
+pip install "pyvark[pandas]"      # format="dataframe" results
+pip install "pyvark[vark-config]" # reuse the Go vark CLI's stored logins
 ```
 
-Version pin (semver-safe):
+Python 3.9 to 3.13. The only required dependency is `requests`.
 
-```sh
-pip install "pyvark>=0.7.0,<0.8"
-```
-
-Editable from a local checkout (development):
-
-```sh
-git clone ssh://git@codeberg.org/mfiers/pyvark.git
-cd pyvark
-uv pip install -e .
-# with pandas for `format='dataframe'` support:
-uv pip install -e ".[pandas]"
-```
-
-Pyodide / JupyterLite:
+In JupyterLite (Pyodide):
 
 ```python
 import micropip
 await micropip.install("pyvark")
 from vark import AnthiveClient
-client = AnthiveClient()   # auto-detects {origin}/api/ in the browser
+client = AnthiveClient()   # uses {origin}/api/ of the page
 ```
 
-## Minimal example
+## Quick start
 
 ```python
-import os
+import getpass
 from vark import AnthiveClient
 
-client = AnthiveClient(
-    "https://my.anthive.example/api",
-    auth=(os.environ["ANTHIVE_USER"], os.environ["ANTHIVE_PASSWORD"]),
-)
-
-# What's on this server?
-print(client.get_version()["version"])
-databases = client.get_databases()
-print(f"{len(databases)} datasets available")
-
-# Pick a dataset and show its metadata fields
-info = client.get_database_info(databases[0]["id"])
-print(info["title"], info["n_cells"], "cells")
-
-# Render a UMAP scatter server-side and write the PNG
-plot = client.get_plot(
-    info["id"], "scatter",
-    color="cell_type",
-    palette_categorical="tab20",
-    width=6, height=5, dpi=150,
-)
-open("umap.png", "wb").write(plot["bytes"])
-
-# The X-Plot-Caption header carries anthive's prose figure legend —
-# this is the ONLY place the multi-sentence caption exists.
-print(plot["caption"])
+client = AnthiveClient("https://my.anthive.example/api", auth=("me", getpass.getpass()))
+print(client.get_version()["version"])                         # e.g. 2.47.0
+datasets = client.get_databases(format="dataframe")             # one row per dataset
+db_id = datasets["id"].iloc[0]                                  # e.g. "AL1/CBL"
+stats = client.get_gene_stats(db_id, ["TREM2", "APOE"], format="dataframe")
+plot = client.get_plot(db_id, "scatter", color="TREM2")         # UMAP coloured by TREM2
+open("trem2_umap.png", "wb").write(plot["bytes"])               # plot["caption"]: the legend
+client.download_artefact("AT6/_group/atlas-umap", "atlas-umap/")  # sha256-checked files
 ```
 
-## Credentials
+The last line needs a 2.47 server that holds that artefact; list what
+exists with `client.list_artefacts()`.
+
+## Authentication
+
+Anthive sites run behind a login proxy, and the REST API under `/api`
+takes your Anthive user name and password as HTTP basic auth on every
+kind of site:
+
+- **Authelia sites** (the default): people log in through a login page
+  in the browser, while scripts, pyvark and vark send the same user
+  name and password as HTTP basic auth on `/api`. There is no separate
+  API password.
+- **Basic-auth sites**: the same HTTP basic credentials as the browser
+  popup.
+- **Public mirrors** (`auth.mode: none`): no login; only public
+  datasets are served. Leave `auth` out.
+
+There are no REST API tokens. The personal MCP token (`amcp_...`, from
+the site's MCP page) only works on `/mcp` for AI clients; it does not
+open `/api`. Datasets that are not public are hidden from callers who
+are not signed in: they are missing from listings and answer 404.
+
+### Where the client finds credentials
 
 Never put a password in a notebook or script. The client finds
 credentials in this order:
@@ -120,7 +115,7 @@ python -c "from vark import AnthiveClient; print(AnthiveClient('https://my.anthi
 ## Reusing vark CLI credentials
 
 Anthive credentials are stored **once** by the Go [`vark`](https://codeberg.org/mfiers/vark)
-CLI — username + password are encrypted at rest with [age](https://age-encryption.org)
+CLI: user name and password are encrypted at rest with [age](https://age-encryption.org)
 (modern X25519 + ChaCha20-Poly1305) into `~/.config/vark/secrets.age`.
 `pyvark` reads from that same store, so a notebook or script never
 needs a password literal, an environment variable, or a `getpass()`
@@ -141,9 +136,9 @@ vark server ls          # confirm the entry is there
 
 That writes two files:
 
-- `~/.config/vark/config.yaml` — the server registry (name, URL, user,
+- `~/.config/vark/config.yaml`: the server registry (name, URL, user,
   `insecure:` flag).
-- `~/.config/vark/secrets.age` — age-encrypted password store.
+- `~/.config/vark/secrets.age`: the age-encrypted password store.
 
 ### Install the pyvark extras
 
@@ -156,7 +151,7 @@ for credential discovery.
 
 ### Use it from Python
 
-**Auto-discover by URL** — no `auth=` argument, no password in code:
+**Auto-discover by URL**, with no `auth=` argument, no password in code:
 
 ```python
 from vark import AnthiveClient
@@ -167,7 +162,7 @@ client = AnthiveClient("https://my.anthive.example/api")
 # on the entry) demotes `verify` to False automatically.
 ```
 
-**Look up by registered name** — handy when you don't want a URL
+**Look up by registered name**, handy when you don't want a URL
 hard-coded in the notebook:
 
 ```python
@@ -183,7 +178,7 @@ client = AnthiveClient.from_vark_server("myserver")
 | `False`       | **Skip.** Never read `~/.config/vark/`, even if it exists.         |
 | `str` / `Path`| Use that directory instead of `~/.config/vark/` (useful for tests / portable setups). |
 
-Explicit `auth=(user, password)` always wins — vark-config discovery
+Explicit `auth=(user, password)` always wins: vark-config discovery
 never overrides a caller-supplied auth. Pyodide / JupyterLite skip
 discovery automatically (no filesystem in the browser).
 
@@ -192,13 +187,13 @@ discovery automatically (no filesystem in the browser).
 - **`401 Unauthorized` on the first request.** Did you actually run
   `vark server login` for this server? A fresh `vark` install lays
   down a placeholder `secrets.age` that decrypts cleanly but contains
-  no real password — the server then 401s. Re-run `vark server login`
+  no real password, and the server then answers 401. Re-run `vark server login`
   to overwrite it.
 - **`NoSuchEntryError` (or "no matching server entry").** The URL
   passed to `AnthiveClient()` doesn't match any entry in
   `vark server ls`. URLs are normalised (trailing slash stripped, host
   case-folded) before matching, so it's almost always a typo or a
-  missing `/api` suffix — compare `vark server ls` output against
+  missing `/api` suffix. Compare `vark server ls` output against
   your constructor argument character-for-character.
 - **`ImportError: pyrage` or `ImportError: yaml`.** You installed the
   base `pyvark` without the extras. Fix:
@@ -207,20 +202,20 @@ discovery automatically (no filesystem in the browser).
 ## API coverage (highlights)
 
 * `get_root`, `get_health`, `get_metrics`, `get_version`,
-  `get_changelog` — version + latency telemetry (`/health` exposes
+  `get_changelog`: version + latency telemetry (`/health` exposes
   `mean_response_ms` / `p50_response_ms` / `n_samples`).
-* `get_databases`, `get_database_info`, `get_group(group_id)` —
+* `get_databases`, `get_database_info`, `get_group(group_id)`:
   catalog + per-collection landing-page data (API 2.5+). Rows carry the
   lineage fields `designation`, `reanalysis_of`, `donor_group` and
   `has_donor_uid` on current servers.
 * `get_donor_groups`: datasets that share a donor pool (do not count
   them as independent donors).
-* `get_plot(db_id, geom, ...)` — every server-side geom: `scatter`,
+* `get_plot(db_id, geom, ...)`: every server-side geom: `scatter`,
   `hexbin`, `kde2d`, `violin`, `box`, `bar`, `histogram`, `ecdf`,
   `kde`, `heatmap`, `rolling`, `volcano`, `ma`, `forest`, `de_heatmap`,
   `de_quadrant`.
   Captures the `X-Plot-Caption` response header (the multi-sentence
-  figure legend — API 2.7.2+). Supports `color_scale=auto|sequential|
+  figure legend, API 2.7.2+). Supports `color_scale=auto|sequential|
   divergent`, plot clamps (`log2fc_clip`, `neglog10p_clip`,
   `logmean_clip`), bar `group_by`, hexbin auto-clip
   (`vmin_quantile` / `vmax_quantile`), per-axis transforms
@@ -228,19 +223,19 @@ discovery automatically (no filesystem in the browser).
   (`kde_n`, `kde_bw`, `n_levels`, `iso_overlay`, `point_overlay`),
   marginals / regline overlays, and on-the-fly binning of a
   continuous `color` field via `bin_color=N` (2..20) +
-  `bin_color_method='quantile'|'width'` — wired on scatter, hexbin,
+  `bin_color_method='quantile'|'width'`, wired on scatter, hexbin,
   rolling (API 2.34+), kde2d (2.35+), histogram / ecdf / kde (2.36+).
   Data export via `format="csv"` /
   `"tsv"` returns the dataframe the plot was built from (API 2.6+).
 * `list_de_studies`, `get_de_study`, `list_de_contrasts`,
-  `get_de_rows`, `get_de_by_gene` — DE data flow (API 2.3+).
-* `analytics_schema`, `analytics_query`, `analytics_viz` —
+  `get_de_rows`, `get_de_by_gene`: DE data flow (API 2.3+).
+* `analytics_schema`, `analytics_query`, `analytics_viz`:
   SELECT-only SQL sandbox + Parquet-backed visualisation.
-* `module_score`, `list_module_scores` — on-the-fly and pre-computed
+* `module_score`, `list_module_scores`: on-the-fly and pre-computed
   module scores.
 * `list_genesets`, `get_geneset`, `rescan_genesets`.
 * `list_catalogs`, `get_catalog`, `get_catalog_module`,
-  `get_catalog_score`, `rescan_catalogs` — unified module-catalog
+  `get_catalog_score`, `rescan_catalogs`: unified module-catalog
   view over starCAT (weighted programs, one-segment id like
   `MICROGLIA_V1_0`) + genesets (plain gene lists, two-segment id
   like `Sierksma2025/WGCNA`). Score recipes let you reproduce
@@ -326,7 +321,7 @@ discovery automatically (no filesystem in the browser).
   facet routes (API 2.46.1+). The client waits and retries for up to
   `warmup_max_wait` seconds (default 180, a constructor argument), then
   raises `AnthiveWarmingUpError`.
-* `pick_fastest(base_urls, ...)` — server-selection helper that
+* `pick_fastest(base_urls, ...)`: a server-selection helper that
   consumes `/health` latency telemetry.
 
 ## Paper library
@@ -625,7 +620,7 @@ inventory = client.list_catalogs(source="starcat")
 for cat in inventory["catalogs"]:
     print(cat["source"], cat["catalog_id"], cat.get("n_modules"))
 
-# 2. Drill into one catalog — module + score summaries.
+# 2. Drill into one catalog: module and score summaries.
 #    catalog_id is one segment for starcat, two for geneset.
 starcat = client.get_catalog("starcat", "MICROGLIA_V1_0")
 print(len(starcat["modules"]), "modules")
@@ -640,7 +635,7 @@ mod = client.get_catalog_module(
 for row in mod["top_genes"]:
     print(f"{row['rank']:2}  {row['gene']:10}  {row['weight']:+.4f}")
 
-# 4. Fetch a derived-score recipe — enough to reproduce it
+# 4. Fetch a derived-score recipe, enough to reproduce it
 #    client-side. Binary `*_pos` calls are just
 #    `usage[column] > threshold` on normalised usage.
 recipe = client.get_catalog_score(
@@ -653,7 +648,7 @@ recipe = client.get_catalog_score(
 `client.rescan_catalogs()` forces a server-side reload after you
 drop a new starCAT TSV or geneset YAML onto the store.
 
-## Recipe — module-score vs gene on the XY plot (API 2.29+)
+## Recipe: module score against a gene on the XY plot (API 2.29+)
 
 `module_score` computes a Seurat-style score on the fly and answers
 with summary statistics plus a `session_id`. The per-cell scores stay
@@ -663,7 +658,7 @@ on the server; attach the session to a plot and the column
 ```python
 from vark import AnthiveClient
 client = AnthiveClient("https://my.anthive.example/api")
-db_id = "S25/V6W"
+db_id = "F24/MIC"   # a dataset with module_scoring_available
 
 score = client.module_score(db_id, genes=["APOE", "TREM2", "CD9", "SPP1"])
 print(score["genes_found"], score["summary"]["median"])
@@ -672,8 +667,8 @@ plot = client.get_plot(
     db_id, "scatter",
     x="module_score", y="SPP1",
     attach_sessions=score["session_id"],
-    color="cell_type",
-    marginals="hist", regline=True,
+    color="ant_cell_type",
+    marginals=True, regline="global",
     width=6, height=5, dpi=150,
 )
 open("dam_vs_spp1.png", "wb").write(plot["bytes"])
@@ -682,7 +677,7 @@ print(plot["caption"])
 # The same session as a SQL table called `scores`.
 by_type = client.analytics_query(
     db_id,
-    "SELECT o.cell_type, AVG(s.module_score) AS mean_score "
+    "SELECT o.ant_cell_type, AVG(s.module_score) AS mean_score "
     "FROM scores s JOIN obscat o USING (cell_name) GROUP BY 1",
     attach_sessions=score["session_id"],
 )
@@ -741,9 +736,18 @@ uv run --with pytest --with requests --with pandas \
 `pyvark` starts at **0.1.0** as a clean break from the legacy
 `antclient` 1.x history that previously lived under
 `anthive4/antclient/`. The Anthive REST API uses its own semver
-(`X.Y.Z`) — see `client.AnthiveClient.API_TARGET` for the version this
+(`X.Y.Z`); see `client.AnthiveClient.API_TARGET` for the version this
 release was last verified against.
+
+## Links
+
+- Source: <https://gitlab.kuleuven.be/bdslab/anthive/pyvark> (mirror:
+  <https://codeberg.org/mfiers/pyvark>)
+- Issues: <https://codeberg.org/mfiers/pyvark/issues>
+- Changelog: <https://gitlab.kuleuven.be/bdslab/anthive/pyvark/-/blob/main/CHANGELOG.md>
+- Anthive server: <https://gitlab.kuleuven.be/bdslab/anthive/anthive4>
+- Go command line client: <https://codeberg.org/mfiers/vark>
 
 ## License
 
-MIT — see `LICENSE`.
+MIT; see `LICENSE`.
