@@ -51,6 +51,7 @@ from .exceptions import (
     PaperUploadDisabledError,
     PaperUploadError,
     PaperUploadForbiddenError,
+    ServerTooOldError,
     ServerWarmingUpWarning,
 )
 
@@ -66,7 +67,7 @@ __all__ = [
     "ArtefactError", "ArtefactNotFoundError", "ArtefactFileNotFoundError", "ArtefactNotOnThisSiteError",
     "ArtefactPurgedError", "ArtefactPurgingError", "ArtefactIntegrityError",
     "ArtefactStorageUnavailableError", "ArtefactRateLimitedError",
-    "ArtefactDownloadError",
+    "ArtefactDownloadError", "ServerTooOldError",
     "PaperUploadError", "PaperUploadForbiddenError",
     "PaperUploadDisabledError", "PaperDuplicateError", "PaperInvalidError",
     "PaperTooLargeError", "PaperNotPDFError",

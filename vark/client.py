@@ -45,7 +45,8 @@ from ._credentials import (
 from .exceptions import (AnthiveWarmingUpError, ArtefactDownloadError,
                          ArtefactError, ArtefactFileNotFoundError,
                          ArtefactIntegrityError,
-                         ArtefactNotFoundError, DepositHeldError,
+                         DepositHeldError,
+                         ServerTooOldError,
                          DepositStoppedError, ServerWarmingUpWarning,
                          raise_for_artefact_status, raise_for_deposit_status,
                          raise_for_upload_status)
@@ -1143,7 +1144,8 @@ class AnthiveClient:
                 - ``window``, ``show_band`` (rolling)
                 - ``kde_n``, ``kde_bw``, ``n_levels``, ``iso_overlay``,
                   ``point_overlay`` (kde2d)
-                - ``marginals``, ``regline`` (XY scatter / hexbin / kde2d)
+                - ``marginals`` (bool), ``regline`` (``'global'`` or
+                  ``'by_group'``) (XY scatter / hexbin / kde2d)
                 - ``study``, ``term``, ``contrast``, ``gene``,
                   ``padj_threshold``, ``log2fc_threshold``, ``n_label``
                   (DE geoms volcano / ma / forest)
@@ -4614,8 +4616,39 @@ class AnthiveClient:
                       params: Optional[Dict[str, Any]] = None) -> Dict:
         """GET an artefact route; non-2xx raises an ArtefactError."""
         response = self._request('GET', path, params=params)
-        raise_for_artefact_status(response)
+        self._raise_for_artefact_response(response)
         return response.json()
+
+    def _raise_for_artefact_response(self, response: 'requests.Response'
+                                     ) -> None:
+        """:func:`raise_for_artefact_status`, but a route the server does
+        not have (404 or 405 without a status word, FastAPI's generic
+        answer) raises :class:`ServerTooOldError` naming the server's
+        version: the artefact store needs REST API 2.47.0+."""
+        if response.status_code in (404, 405):
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            generic = (not isinstance(body, dict)
+                       or ('status' not in body and body.get('detail') in (
+                           'Not Found', 'Method Not Allowed')))
+            if generic:
+                server_version = None
+                try:
+                    server_version = self.get_version().get('version')
+                except Exception:  # noqa: BLE001 - the message still helps
+                    pass
+                response.close()
+                raise ServerTooOldError(
+                    f"this anthive server (REST API "
+                    f"{server_version or 'version unknown'}) has no artefact "
+                    f"store or collection listing; it needs anthive REST API "
+                    f"2.47.0+ (url: {response.url})",
+                    status_code=response.status_code,
+                    body=body if isinstance(body, dict) else {},
+                    response=response, server_version=server_version)
+        raise_for_artefact_status(response)
 
     def list_artefacts(self,
                        db_id: Optional[str] = None,
@@ -4813,7 +4846,7 @@ class AnthiveClient:
         label = self._version_label(version, from_ref)
         response = self._request(
             'GET', f'{base}/{label}/preview/{_quote_file_name(name)}')
-        raise_for_artefact_status(response)
+        self._raise_for_artefact_response(response)
         return response.content
 
     def _artefact_file_response(self, path: str, *, stream: bool,
@@ -4826,7 +4859,7 @@ class AnthiveClient:
         if response.status_code not in (301, 302, 303, 307, 308):
             if not response.ok:
                 try:
-                    raise_for_artefact_status(response)
+                    self._raise_for_artefact_response(response)
                 finally:
                     response.close()
             return response
@@ -5096,61 +5129,16 @@ class AnthiveClient:
                 f"format must be 'json' or 'dataframe', got {format!r}")
         return result
 
-    def list_analysis_collections(self, scan_datasets: bool = False
-                                  ) -> List[Dict]:
+    def list_analysis_collections(self) -> List[Dict]:
         """Analysis collections you may see (REST API 2.47.0+):
-        ``list_collections(kind='analysis')['collections']``.
+        ``list_collections(kind='analysis')['collections']``, sorted by
+        ``group_id``.
 
-        Only when the server has no ``/collections`` route (404) and its
-        ``/version`` is older than 2.47.0, this falls back to asking
-        :meth:`get_group` for the group id of every visible artefact
-        (and, with ``scan_datasets``, of every served dataset); that
-        misses analysis collections without artefacts. The fallback
-        rows have the same keys as :meth:`list_collections`.
-
-        Args:
-            scan_datasets: Fallback only: also check the collections of
-                served datasets (one request per collection).
-
-        Returns:
-            The collection rows of :meth:`list_collections`, sorted by
-            ``group_id``.
+        Analysis collections, like artefacts, exist from 2.47.0 on; an
+        older server raises :class:`ServerTooOldError`.
         """
-        try:
-            return list(self.list_collections(kind='analysis')
-                        .get('collections') or [])
-        except ArtefactError as exc:
-            if exc.status_code != 404 or not self._server_older_than(
-                    (2, 47, 0)):
-                raise
-        listing = self.list_artefacts(limit=200, all_pages=True)
-        group_ids = {row.get('group_id')
-                     for row in listing.get('artefacts') or []
-                     if row.get('group_id')}
-        if scan_datasets:
-            for row in self.get_databases():
-                db_id = row.get('db_id') if isinstance(row, dict) else None
-                if db_id and '/' in db_id:
-                    group_ids.add(db_id.split('/', 1)[0])
-        collections = []
-        for group_id in sorted(group_ids):
-            try:
-                group = self.get_group(group_id)
-            except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 404:
-                    continue
-                raise
-            if group.get('collection_kind') == 'analysis':
-                collections.append({
-                    'group_id': group_id, 'group': group.get('group'),
-                    'title': group.get('title'),
-                    'collection_kind': 'analysis',
-                    'access': group.get('access'),
-                    'n_datasets': len(group.get('datasets') or []),
-                    'artefacts_count': group.get('artefacts_count'),
-                    'authors': group.get('authors'),
-                    'year': group.get('year')})
-        return collections
+        return list(self.list_collections(kind='analysis')
+                    .get('collections') or [])
 
     def _server_older_than(self, version: Tuple[int, int, int]) -> bool:
         """Whether the server's ``/version`` is older than ``version``

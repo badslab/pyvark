@@ -37,6 +37,7 @@ from vark import (  # noqa: E402
     ArtefactRateLimitedError,
     ArtefactStorageUnavailableError,
     DatasetDepositError,
+    ServerTooOldError,
     DepositHeldError,
     DepositNotOwnerError,
     DepositQuotaError,
@@ -503,33 +504,43 @@ def test_list_analysis_collections_uses_collections_route(http, client):
     assert http.last['params'] == {'kind': 'analysis'}
 
 
-def test_list_analysis_collections_fallback_on_old_server(http, client):
-    http.queue(
-        make_response(404, {'detail': 'Not Found'}),
-        make_response(200, {'version': '2.46.3'}),
-        make_response(200, {'artefacts': [{'ref': 'AT6/_group/x', 'group_id': 'AT6'},
-                                          {'ref': 'PU1/pub/y', 'group_id': 'PU1'}],
-                            'next_cursor': None}),
-        make_response(200, {'group_id': 'AT6', 'group': 'Atlas2026',
-                            'collection_kind': 'analysis', 'datasets': [],
-                            'artefacts_count': 1, 'access': 'public'}),
-        make_response(200, {'group_id': 'PU1', 'collection_kind': 'datasets',
-                            'datasets': [{'db_id': 'PU1/pub'}]}))
-    collections = client.list_analysis_collections()
-    assert collections == [{'group_id': 'AT6', 'group': 'Atlas2026', 'title': None,
-                            'collection_kind': 'analysis', 'access': 'public',
-                            'n_datasets': 0, 'artefacts_count': 1,
-                            'authors': None, 'year': None}]
-    assert [call['url'] for call in http.calls] == [
-        f'{BASE}/collections', f'{BASE}/version', f'{BASE}/artefacts',
-        f'{BASE}/groups/AT6', f'{BASE}/groups/PU1']
+# ── servers older than 2.47.0 ───────────────────────────────────────────
 
 
-def test_list_analysis_collections_no_fallback_on_new_server(http, client):
+@pytest.mark.parametrize('call', [
+    lambda c: c.list_artefacts(),
+    lambda c: c.get_artefact(REF),
+    lambda c: c.get_artefact_versions(REF),
+    lambda c: c.download_artefact_file(REF, 'a.png'),
+    lambda c: c.get_artefact_preview(REF, 'a.png.webp'),
+    lambda c: c.list_collections(),
+    lambda c: c.list_artefact_purges(),
+    lambda c: c.list_analysis_collections(),
+])
+def test_old_server_raises_server_too_old(http, client, call):
     http.queue(make_response(404, {'detail': 'Not Found'}),
-               make_response(200, {'version': '2.47.0'}))
-    with pytest.raises(ArtefactError):
-        client.list_analysis_collections()
+               make_response(200, {'version': '2.46.4'}))
+    with pytest.raises(ServerTooOldError) as caught:
+        call(client)
+    assert caught.value.server_version == '2.46.4'
+    assert caught.value.required_version == '2.47.0'
+    assert '2.47.0+' in str(caught.value) and '2.46.4' in str(caught.value)
+    assert isinstance(caught.value, ArtefactError)
+    assert not isinstance(caught.value, ArtefactNotFoundError)
+
+
+def test_old_server_check_when_version_unreadable(http, client):
+    http.queue(make_response(404, {'detail': 'Not Found'}),
+               make_response(500, {}), make_response(500, {}))
+    with pytest.raises(ServerTooOldError, match='version unknown'):
+        client.list_artefacts()
+
+
+def test_new_server_404_with_status_word_is_not_too_old(http, client):
+    http.queue(make_response(404, {'status': 'not_found', 'message': 'no artefact'}))
+    with pytest.raises(ArtefactNotFoundError):
+        client.get_artefact(REF)
+    assert len(http.calls) == 1
 
 
 # ── purge requests ──────────────────────────────────────────────────────

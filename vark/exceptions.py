@@ -166,6 +166,30 @@ class ArtefactError(AnthiveAPIError):
         self.retry_after = retry_after
 
 
+class ServerTooOldError(ArtefactError):
+    """The server does not have this route: the artefact store and the
+    collection listing need anthive REST API 2.47.0 or newer.
+
+    Raised instead of a bare 404 when a route answers FastAPI's generic
+    ``{"detail": "Not Found"}`` (a 2.47 server always sends a status
+    word on these routes).
+
+    Attributes:
+        required_version: The REST API version the call needs.
+        server_version: What the server's ``/version`` reports, if known.
+    """
+
+    def __init__(self, message: str, *, status_code: int,
+                 body: Optional[Dict[str, Any]] = None,
+                 response: Optional[requests.Response] = None,
+                 required_version: str = '2.47.0',
+                 server_version: Optional[str] = None):
+        super().__init__(message, status_code=status_code, body=body,
+                         response=response)
+        self.required_version = required_version
+        self.server_version = server_version
+
+
 class ArtefactNotFoundError(ArtefactError):
     """404 ``not_found``: no such artefact, version or file, or one the
     caller may not see (the server does not tell them apart)."""
