@@ -1,34 +1,41 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyvark"
 version = "0.12.0"
-description = "Python REST client for the Anthive single-cell RNA-seq browser (sibling of the Go `vark` CLI)"
-readme = "README.md"
+description = "Python client for the Anthive REST API: single-cell, bulk and spatial transcriptomics datasets, plots, facet tests, papers and analysis artefacts"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Mark Fiers", email = "mark.fiers@kuleuven.be" },
 ]
+maintainers = [
+    { name = "Mark Fiers", email = "mark.fiers@kuleuven.be" },
+]
 keywords = [
+    "anthive",
     "bioinformatics",
     "single-cell",
-    "rna-seq",
-    "anthive",
+    "scrna-seq",
+    "transcriptomics",
+    "microglia",
     "rest-client",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -52,10 +59,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage      = "https://codeberg.org/mfiers/pyvark"
-Repository    = "https://codeberg.org/mfiers/pyvark"
+Homepage      = "https://gitlab.kuleuven.be/bdslab/anthive/pyvark"
+Source        = "https://gitlab.kuleuven.be/bdslab/anthive/pyvark"
+Mirror        = "https://codeberg.org/mfiers/pyvark"
+Issues        = "https://codeberg.org/mfiers/pyvark/issues"
+Changelog     = "https://gitlab.kuleuven.be/bdslab/anthive/pyvark/-/blob/main/CHANGELOG.md"
 "Go CLI"      = "https://codeberg.org/mfiers/vark"
-"Bug Tracker" = "https://codeberg.org/mfiers/pyvark/issues"
 
 [tool.setuptools]
 packages = ["vark"]
