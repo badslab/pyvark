@@ -58,7 +58,7 @@ from .exceptions import (
 # Backward-compatibility alias (matches antclient 1.x).
 AntClient = AnthiveClient
 
-__version__ = "0.12.0"
+__version__ = "0.12.1"
 __all__ = [
     "AnthiveClient", "AntClient", "VarkConfigError", "__version__",
     "AnthiveAPIError", "AnthiveWarmingUpError", "ServerWarmingUpWarning",

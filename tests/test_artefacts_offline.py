@@ -109,7 +109,7 @@ def redirect(location: str = SIGNED) -> requests.Response:
 
 
 def test_version_and_target():
-    assert vark.__version__ == '0.12.0'
+    assert vark.__version__ == '0.12.1'
     assert AnthiveClient.API_TARGET == '2.47.0'
 
 

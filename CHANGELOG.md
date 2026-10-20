@@ -3,16 +3,68 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.12.1 (2026-10-20)
+
+Polish for PyPI readers and older servers. `API_TARGET` stays "2.47.0".
+Checked against ant-serve 2.47.0 (the anthive4 artefacts branch and the
+dev site) and 2.46.4.
+
+### Added
+
+- `ServerTooOldError` (a subclass of `ArtefactError`, with
+  `required_version` and `server_version`). A 2.46 server answers the
+  artefact and collection routes with FastAPI's bare 404; pyvark now
+  raises "this anthive server (REST API 2.46.4) has no artefact store or
+  collection listing; it needs anthive REST API 2.47.0+" instead of an
+  `ArtefactNotFoundError`. A 404 that carries a status word (every 2.47
+  answer) stays an `ArtefactNotFoundError`. Covers `list_artefacts`,
+  `get_artefact`, `get_artefact_versions`, `get_artefact_version`,
+  `get_artefact_preview`, `download_artefact_file`, `download_artefact`,
+  `list_collections`, `list_analysis_collections` and
+  `list_artefact_purges`.
+
+### Changed
+
+- `list_analysis_collections()` loses its pre-2.47 fallback and the
+  `scan_datasets` argument. Analysis collections exist from 2.47.0 on,
+  and on a 2.46 server the fallback could only fail (it read
+  `/artefacts`, which is missing there too); such a server now raises
+  `ServerTooOldError`.
+- Packaging: SPDX license expression `MIT` with `license-files`
+  (setuptools 77+), the README declared as Markdown, classifiers for
+  Python 3.9 to 3.13 (the offline suite passes on each), maintainers,
+  keywords, and project URLs for the GitLab home and source, the
+  Codeberg mirror, the Codeberg issue tracker and the changelog (0.12.0
+  still pointed everything at Codeberg). `requests>=2.25` stays the only
+  required dependency; pandas (`[pandas]`) and the vark credential store
+  (`[vark-config]`) are extras. The sdist now carries `CHANGELOG.md`.
+- README rewritten for PyPI readers: what pyvark is, supported servers,
+  install, a quick start checked against a 2.47 server, and how to sign
+  in on Authelia, basic-auth and public sites (HTTP basic on `/api`;
+  there are no REST API tokens, MCP tokens only open `/mcp`). Fixed
+  examples: the old minimal example used `info["id"]`, which `/info`
+  does not return; the module-score recipe used `marginals="hist"` and
+  `regline=True`, which the server refuses (now `marginals=True`,
+  `regline="global"`, on a dataset with module scoring). No em-dashes
+  left in the README.
+- `get_plot` docstring: `marginals` is a bool and `regline` is
+  `'global'` or `'by_group'`.
+
+### Tests
+
+- `tests/test_artefacts_offline.py`: `ServerTooOldError` on every 2.47
+  method against a 2.46 answer, an unreadable `/version`, and a 2.47
+  404 with a status word staying `ArtefactNotFoundError` (72 tests).
+
 ## 0.12.0 (2026-10-20)
 
 The first PyPI release since 0.7.0. Versions 0.8.0 to 0.11.0 were never
 published on PyPI; their changes (entries below) are all part of 0.12.0.
 
 Targets anthive REST API 2.47 (`API_TARGET` "2.47.0"): the artefact
-store, read side, and the collection listing. Works with 2.46 servers;
-there the 2.47 methods raise `ServerTooOldError`. Checked against
-ant-serve 2.47.0 (the anthive4 artefacts branch and the dev site) and
-2.46.4. Nothing is removed or renamed.
+store, read side, and the collection listing. Checked against ant-serve
+from the anthive4 branch that carries 2.47.0 (unreleased; `/version`
+2.47.0). Nothing is removed or renamed.
 
 ### Added (API 2.47.0)
 
@@ -53,10 +105,11 @@ ant-serve 2.47.0 (the anthive4 artefacts branch and the dev site) and
   `GET /collections` (`{n_collections, collections}`, each with
   `group_id`, `group`, `title`, `collection_kind`, `access`,
   `n_datasets`, `artefacts_count`, `authors`, `year`).
-  `list_analysis_collections()` returns its `kind=analysis` rows.
-  Analysis collections exist from 2.47.0 on, so there is no fallback
-  for older servers (an earlier draft of this release had one; on a
-  2.46 server it could only fail, since `/artefacts` is missing too).
+  `list_analysis_collections()` returns its `kind=analysis` rows. Only
+  when a server without the route (404) reports a `/version` older than
+  2.47.0 does it fall back to asking `get_group` for the group of every
+  visible artefact (`scan_datasets=True` adds the groups of served
+  datasets); the fallback rows have the same keys.
   - `parse_artefact_ref(ref)` (static).
 - `wait_for_deposit(deposit_id, timeout=1800, poll_interval=15)`: polls
   `get_deposit` until `live`; raises `DepositHeldError` (with
@@ -75,13 +128,7 @@ ant-serve 2.47.0 (the anthive4 artefacts branch and the dev site) and
   client-side checksum mismatch, with `expected_sha256` and
   `actual_sha256`), `ArtefactStorageUnavailableError`,
   `ArtefactRateLimitedError` and `ArtefactDownloadError` (the signed
-  link failed, for example after it expired), and `ServerTooOldError`
-  (`required_version`, `server_version`): a 2.46 server answers the
-  artefact and collection routes with FastAPI's bare 404, which pyvark
-  turns into "this anthive server (REST API 2.46.4) has no artefact
-  store or collection listing; it needs anthive REST API 2.47.0+".
-  A 404 that carries a status word stays an `ArtefactNotFoundError`.
-  Other refusals keep the
+  link failed, for example after it expired). Other refusals keep the
   server's word in `status`: `invalid_group_id`, `invalid_limit`,
   `invalid_kind`, `invalid_state`, `invalid_cursor`. Deposit answers:
   `DepositNotOwnerError` (403 `not_owner`: a new version of someone
@@ -102,25 +149,6 @@ ant-serve 2.47.0 (the anthive4 artefacts branch and the dev site) and
   and are there for a later upload release.
 
 ### Changed
-
-- Packaging for PyPI: SPDX license expression `MIT` with
-  `license-files` (setuptools 77+), the README declared as Markdown,
-  classifiers for Python 3.9 to 3.13 (the offline suite passes on each),
-  maintainers, keywords, and project URLs for the GitLab home and
-  source, the Codeberg mirror, the Codeberg issue tracker and the
-  changelog. `requests>=2.25` stays the only required dependency;
-  pandas (`[pandas]`) and the vark credential store (`[vark-config]`)
-  are extras.
-- README rewritten for PyPI readers: what pyvark is, supported servers,
-  install, a quick start checked against a 2.47 server, and how to
-  sign in on Authelia, basic-auth and public sites (HTTP basic on
-  `/api`; there are no REST API tokens, MCP tokens only open `/mcp`).
-  The old minimal example used `info["id"]`, which `/info` does not
-  return; the module-score recipe used `marginals="hist"` and
-  `regline=True`, which the server refuses (now `marginals=True`,
-  `regline="global"`, on a dataset with module scoring).
-- `get_plot` docstring: `marginals` is a bool and `regline` is
-  `'global'` or `'by_group'`.
 
 - `get_deposit_vocab` docstring: `caller` has `may_deposit_datasets`,
   `may_deposit_artefacts` and `may_create_collections`, and the new
@@ -154,7 +182,7 @@ ant-serve 2.47.0 (the anthive4 artefacts branch and the dev site) and
   the manifest name clash, typed errors (`file_not_found`, the new
   error words), `list_collections`, analysis collections with the
   pre-2.47 fallback, `list_artefact_purges`, the vocabulary rights and
-  `wait_for_deposit`, `ServerTooOldError` on 2.46 servers (72 tests).
+  `wait_for_deposit` (64 tests).
 - `tests/test_integration_artefacts.py`: a throw-away ant-serve from an
   anthive4 tree (port 18700-18799) with a temporary store built by
   anthive4's own `tests/artefact_helpers.py` and a fake S3 in the test
