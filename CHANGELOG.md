@@ -101,6 +101,17 @@ from the anthive4 branch that carries 2.47.0 (unreleased; `/version`
   `manifest.json` in deposits (422 `invalid_name`), so the manifest is
   always written as `manifest.json`; `_manifest.json` is kept only for
   an older artefact that has such a file.
+- Docstrings from the 2.47 client audit: `get_deposit_vocab` names
+  `held_reasons_retired` (reasons a server no longer uses, so older held
+  records can still be explained) and says a controlled or missing
+  `data_use` is a warning, never a hold; `get_deposit_report` names the
+  layer checks' `sample_mode` detail (`sampled`, `sampled_runs`,
+  `matrix_exhausted`); the artefact methods name the manifest's
+  `previews` list (`[{file, name, size, sha256}]`; `download_artefact`
+  does not fetch previews); `get_databases` says reanalyses are listed
+  by default (`primary_only=True` drops them) while the counting
+  functions exclude them by default (`exclude_secondary=True`). pyvark
+  has no dataset search method, so there was nothing else to change.
 - `get_group` and `get_database_info` docstrings: the new
   `collection_kind` and `artefacts_count` fields, and the 200 answer of
   an analysis collection without datasets (the fields were already

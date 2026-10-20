@@ -614,6 +614,13 @@ class AnthiveClient:
                       ) -> Union[List[Dict], Any]:
         """``GET /databases``. List every available dataset.
 
+        Reanalyses (``designation: reanalysis``, ``is_secondary: True``)
+        are listed by default; pass ``primary_only=True`` to drop them.
+        The counting and pooling functions do the opposite: they exclude
+        reanalyses by default (``exclude_secondary=True``, e.g.
+        :meth:`get_gene_stats_all`, :meth:`get_module_variability`,
+        :meth:`get_facet`), so cells are not counted twice.
+
         Each row carries an ``is_secondary`` boolean (REST API 2.37+). A
         value of ``True`` means the dataset re-aggregates cells that are
         already counted in another study and should be excluded from
@@ -4424,6 +4431,14 @@ class AnthiveClient:
         ``anthive.ingest_check/1``, curator audience, no server paths;
         REST API 2.46.0+).
 
+        From REST API 2.47.0 the layer checks (``layers.counts``,
+        ``layers.x_lognorm``, ``layers.consistency``) carry the detail
+        key ``sample_mode``: ``sampled`` (2,000 random cells),
+        ``sampled_runs`` (16 runs of 125 consecutive cells, used when
+        random cells would decompress too much of a compressed matrix;
+        the summary says so too) or ``matrix_exhausted`` (every cell
+        was read). Verdict thresholds do not depend on it.
+
         Raises:
             DatasetDepositError: 404 ``no_report`` before the check ran
                 (the body then carries ``state`` and ``reason``), 404
@@ -4443,7 +4458,12 @@ class AnthiveClient:
         is_admin, may_replace_de_study, may_list_all_deposits,
         may_update_any_dataset}``).
 
-        REST API 2.47.0+: ``caller`` adds ``may_deposit_datasets``,
+        REST API 2.47.0+: ``held_reasons_retired`` labels the reasons a
+        server no longer uses (``controlled_access``,
+        ``data_use_unknown``), so records held for them earlier can
+        still be explained. A controlled or missing ``data_use`` is a
+        warning from 2.47.0 on, never a hold (everyone with access to a
+        server sees all its data). ``caller`` adds ``may_deposit_datasets``,
         ``may_deposit_artefacts`` and ``may_create_collections``; an
         ``artefacts`` block (kinds and their file endings, limits,
         provenance rules, held reasons, the incoming key, and again
@@ -4703,9 +4723,12 @@ class AnthiveClient:
         you cannot see"}``), ``declared`` (author, created, software,
         code, parameters, as the depositor stated them) and
         ``recorded`` (what the server recorded: uploader, publication
-        time, checks, approval). A de_table manifest has a ``de`` block
-        (per table study id, rows, genes matched, sign convention, and
-        ``imported``).
+        time, checks, approval). ``previews`` lists the server-made
+        previews as ``[{file, name, size, sha256}]`` (``file`` is the
+        manifest file, ``name`` the preview, e.g. ``a.png.webp``; fetch
+        one with :meth:`get_artefact_preview`). A de_table manifest has
+        a ``de`` block (per table study id, rows, genes matched, sign
+        convention, and ``imported``).
 
         Args:
             ref: ``<group_id>/<scope>/<artefact_id>[@v<N>]``.
@@ -4751,8 +4774,8 @@ class AnthiveClient:
         One version (REST API 2.47.0+).
 
         Returns ``{ref, version, state, latest, manifest, files}``;
-        ``ref`` carries ``@v<N>``. ``files`` is as in
-        :meth:`get_artefact`.
+        ``ref`` carries ``@v<N>``. ``files`` and the manifest (with
+        ``made_from`` and ``previews``) are as in :meth:`get_artefact`.
 
         Args:
             ref: The reference; its ``@v<N>`` is used when ``version``
@@ -4774,7 +4797,9 @@ class AnthiveClient:
         """``GET .../{version}/preview/{name}``. The server-generated
         preview of one file: ``<file>.webp`` for figures, ``<file>.txt``
         (first lines) for tables (REST API 2.47.0+). The ``preview``
-        field of a file in :meth:`get_artefact` says whether one exists.
+        field of a file in :meth:`get_artefact` says whether one exists
+        here; the manifest's ``previews`` list (``[{file, name, size,
+        sha256}]``) names every preview with its sha256.
 
         Args:
             ref: The reference.
@@ -4983,7 +5008,8 @@ class AnthiveClient:
             files: Only these file names (default: every file).
             verify: Check size and sha256 (on by default).
             write_manifest: Also write the version's manifest as
-                ``manifest.json``. The server refuses deposits with a
+                ``manifest.json`` (previews are not downloaded; use
+                :meth:`get_artefact_preview`). The server refuses deposits with a
                 top-level file of that name (API 2.47.0); for an older
                 artefact that has one, the manifest goes to
                 ``_manifest.json``.
