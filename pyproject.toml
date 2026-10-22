@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyvark"
-version = "0.12.1"
+version = "0.12.2"
 description = "Python client for the Anthive REST API: single-cell, bulk and spatial transcriptomics datasets, plots, facet tests, papers and analysis artefacts"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"

@@ -32,7 +32,10 @@ from vark import (  # noqa: E402
     ArtefactIntegrityError,
     ArtefactNotFoundError,
     ArtefactNotOnThisSiteError,
+    ArtefactDeletedError,
+    ArtefactDeletingError,
     ArtefactPurgedError,
+    ArtefactPurgedWarning,
     ArtefactPurgingError,
     ArtefactRateLimitedError,
     ArtefactStorageUnavailableError,
@@ -109,7 +112,7 @@ def redirect(location: str = SIGNED) -> requests.Response:
 
 
 def test_version_and_target():
-    assert vark.__version__ == '0.12.1'
+    assert vark.__version__ == '0.12.2'
     assert AnthiveClient.API_TARGET == '2.47.0'
 
 
@@ -263,20 +266,82 @@ def test_not_found_is_typed(http, client):
     assert caught.value.ref == REF
 
 
-def test_purged_version_has_tombstone(http, client):
-    tombstone = {'version': 1, 'state': 'purged', 'purged_by': 'an admin',
-                 'purge_reason': None}
-    http.queue(make_response(410, {'status': 'purged', 'message': 'purged',
+def test_deleted_version_has_tombstone(http, client):
+    tombstone = {'version': 1, 'state': 'deleted', 'purged_by': 'an admin',
+                 'purge_reason': None, 'deleted': '2026-10-21',
+                 'deleted_by': 'an admin', 'delete_reason': None}
+    http.queue(make_response(410, {'status': 'deleted', 'message': 'deleted',
                                    'ref': REF + '@v1', 'tombstone': tombstone}))
-    with pytest.raises(ArtefactPurgedError) as caught:
+    with pytest.raises(ArtefactDeletedError) as caught:
         client.get_artefact_version(REF + '@v1')
     assert caught.value.tombstone == tombstone
+    assert caught.value.status == 'deleted'
 
 
-def test_purging_version(http, client):
-    http.queue(make_response(409, {'status': 'purging', 'message': 'busy'}))
-    with pytest.raises(ArtefactPurgingError):
+def test_purged_error_is_an_alias_of_deleted():
+    assert ArtefactPurgedError is ArtefactDeletedError
+    assert ArtefactPurgingError is ArtefactDeletingError
+
+
+def test_old_server_purged_word_maps_to_deleted(http, client):
+    http.queue(make_response(410, {'status': 'purged', 'message': 'purged',
+                                   'tombstone': {'version': 1}}))
+    with pytest.raises(ArtefactDeletedError):
+        client.get_artefact_version(REF + '@v1')
+
+
+@pytest.mark.parametrize('word', ['deleting', 'purging'])
+def test_deleting_version(http, client, word):
+    http.queue(make_response(409, {'status': word, 'message': 'busy'}))
+    with pytest.raises(ArtefactDeletingError):
         client.get_artefact_version(REF, 1)
+
+
+def soft_purged_payload(files):
+    payload = version_payload(files, version=1)
+    payload['state'] = 'purged'
+    payload['purge'] = {'purged': '2026-10-21', 'purged_by': 'alice',
+                        'purge_reason': 'wrong contrast'}
+    return payload
+
+
+def test_soft_purged_version_is_returned_not_raised(http, client):
+    http.queue(make_response(200, soft_purged_payload([file_entry('a.png', FIGURE)])))
+    payload = client.get_artefact_version(REF + '@v1')
+    assert payload['state'] == 'purged'
+    assert payload['purge']['purge_reason'] == 'wrong contrast'
+
+
+def test_soft_purged_download_works_with_warning(http, client, tmp_path):
+    files = [file_entry('a.png', FIGURE)]
+    http.queue(make_response(200, soft_purged_payload(files)),
+               make_response(200, content=FIGURE))
+    with pytest.warns(ArtefactPurgedWarning, match='wrong contrast'):
+        assert client.download_artefact_file(REF + '@v1', 'a.png') == FIGURE
+    http.queue(make_response(200, soft_purged_payload(files)),
+               make_response(200, content=FIGURE))
+    with pytest.warns(ArtefactPurgedWarning):
+        written = client.download_artefact(REF + '@v1', tmp_path)
+    assert written['a.png'].read_bytes() == FIGURE
+
+
+def test_soft_purged_warning_can_be_an_error(http, client):
+    import warnings
+    http.queue(make_response(200, soft_purged_payload([file_entry('a.png', FIGURE)])))
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', ArtefactPurgedWarning)
+        with pytest.raises(ArtefactPurgedWarning):
+            client.download_artefact_file(REF + '@v1', 'a.png')
+    assert len(http.calls) == 1
+
+
+def test_live_download_does_not_warn(http, client):
+    import warnings
+    http.queue(make_response(200, version_payload([file_entry('a.png', FIGURE)])),
+               make_response(200, content=FIGURE))
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', ArtefactPurgedWarning)
+        assert client.download_artefact_file(REF, 'a.png') == FIGURE
 
 
 def test_preview(http, client):
@@ -556,6 +621,10 @@ def test_list_artefact_purges(http, client):
     assert not http.last['params']
     client.list_artefact_purges(state='done')
     assert http.last['params'] == {'state': 'done'}
+    client.list_artefact_purges(action='soft')
+    assert http.last['params'] == {'action': 'soft'}
+    client.list_artefact_purges(state='done', action='hard')
+    assert http.last['params'] == {'state': 'done', 'action': 'hard'}
 
 
 def test_list_artefact_purges_refusals(http, client):
@@ -567,6 +636,10 @@ def test_list_artefact_purges_refusals(http, client):
     with pytest.raises(ArtefactError) as caught:
         client.list_artefact_purges()
     assert caught.value.status_code == 403
+    http.queue(make_response(422, {'status': 'invalid_action', 'message': 'no'}))
+    with pytest.raises(ArtefactError) as caught:
+        client.list_artefact_purges(action='nuke')
+    assert caught.value.status == 'invalid_action'
 
 
 # ── deposits: typed refusals and wait_for_deposit ───────────────────────
