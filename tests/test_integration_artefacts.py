@@ -55,7 +55,8 @@ from vark import (  # noqa: E402
     ArtefactIntegrityError,
     ArtefactNotFoundError,
     ArtefactNotOnThisSiteError,
-    ArtefactPurgedError,
+    ArtefactDeletedError,
+    ArtefactPurgedWarning,
 )
 
 SOURCE = os.environ.get('ANTHIVE4_SOURCE')
@@ -86,8 +87,11 @@ write_index_md(store, 'Notes2026', group='Notes2026', group_id='NO6', collection
 write_artefact(store, 'Atlas2026', 'AT6', '_group', 'figure', 'atlas-umap',
                [{'files': {'a.png': FIG1}}, {'files': {'a.png': FIG2, 'panels/b.png': PANEL}}], previews=True)
 write_artefact(store, 'Atlas2026', 'AT6', '_group', 'table', 'atlas-table',
-               [{'files': {'t.tsv': b'gene\tx\nA\t1\n'}, 'state': 'purged', 'purged_by': 'root',
+               [{'files': {'t.tsv': b'gene\tx\nA\t1\n'}, 'state': 'deleted', 'purged_by': 'root',
                  'purged_by_admin': True}, {'files': {'t.tsv': b'gene\tx\nA\t2\n'}}])
+# soft-purged v1 (files kept, still served), live v2
+write_artefact(store, 'Atlas2026', 'AT6', '_group', 'figure', 'atlas-soft',
+               [{'files': {'s.png': FIG1}, 'state': 'purged', 'purged_by': 'alice'}, {'files': {'s.png': FIG2}}])
 s3_only = write_artefact(store, 'Atlas2026', 'AT6', '_group', 'report', 'atlas-s3',
                          [{'files': {'r.pdf': S3_BODY}}], local_files=False)
 bad = write_artefact(store, 'Atlas2026', 'AT6', '_group', 'report', 'atlas-bad',
@@ -322,11 +326,23 @@ def test_detail_versions_and_tombstone(anon):
     assert detail['manifest']['version'] == 2 and 'made_from' in detail['manifest']
     assert anon.get_artefact('AT6/_group/atlas-umap@v1')['version'] == 1
     tombstone = anon.get_artefact_versions('AT6/_group/atlas-table')['versions'][0]
-    assert tombstone['state'] == 'purged' and tombstone['purged_by'] == 'an admin'
-    with pytest.raises(ArtefactPurgedError) as caught:
+    assert tombstone['state'] == 'deleted'
+    with pytest.raises(ArtefactDeletedError) as caught:
         anon.get_artefact_version('AT6/_group/atlas-table@v1')
-    assert caught.value.tombstone['version'] == 1
+    assert caught.value.tombstone['version'] == 1 and caught.value.status == 'deleted'
     assert anon.get_artefact_preview('AT6/_group/atlas-umap', 'a.png.webp').startswith(b'RIFF')
+
+
+def test_soft_purged_version_is_served_with_warning(alice, tmp_path):
+    versions = alice.get_artefact_versions('AT6/_group/atlas-soft')['versions']
+    assert [version['state'] for version in versions] == ['purged', 'live']
+    assert versions[0]['purged_by'] == 'alice'
+    payload = alice.get_artefact_version('AT6/_group/atlas-soft@v1')
+    assert payload['state'] == 'purged' and payload['purge']['purged_by'] == 'alice'
+    assert alice.get_artefact_version('AT6/_group/atlas-soft@v2')['purge'] is None
+    with pytest.warns(ArtefactPurgedWarning):
+        written = alice.download_artefact('AT6/_group/atlas-soft@v1', tmp_path / 'soft')
+    assert written['s.png'].read_bytes() == FIG1
 
 
 def test_download_local_copies_verified(anon, tmp_path):
@@ -360,7 +376,7 @@ def test_collections(server, anon, alice):
     analysis = alice.list_analysis_collections()
     assert [row['group_id'] for row in analysis] == ['AT6', 'NO6']
     atlas = analysis[0]
-    assert atlas['collection_kind'] == 'analysis' and atlas['artefacts_count'] == 5
+    assert atlas['collection_kind'] == 'analysis' and atlas['artefacts_count'] == 6
     assert atlas['n_datasets'] == 0 and atlas['access'] == 'public'
     everything = alice.list_collections()
     assert everything['n_collections'] == len(everything['collections'])
@@ -374,7 +390,7 @@ def test_collections(server, anon, alice):
         anon.list_collections(kind='movies')
     assert caught.value.status == 'invalid_kind'
     group = anon.get_group('AT6')
-    assert group['collection_kind'] == 'analysis' and group['artefacts_count'] == 5
+    assert group['collection_kind'] == 'analysis' and group['artefacts_count'] == 6
 
 
 def test_new_error_words(anon):
@@ -401,6 +417,10 @@ def test_artefact_purges(anon, alice):
         anon.list_artefact_purges()
     assert caught.value.status_code == 403
     assert alice.list_artefact_purges() == {'purges': []}
+    assert alice.list_artefact_purges(action='soft') == {'purges': []}
+    with pytest.raises(ArtefactError) as caught:
+        alice.list_artefact_purges(action='nuke')
+    assert caught.value.status == 'invalid_action'
     with pytest.raises(ArtefactError) as caught:
         alice.list_artefact_purges(state='gone')
     assert caught.value.status == 'invalid_state'
