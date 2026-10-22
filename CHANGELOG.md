@@ -3,6 +3,49 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
+## 0.12.2 (unreleased)
+
+Follows the two-stage artefact purge of the anthive 2.47 branch (live on
+the dev site). `API_TARGET` stays "2.47.0". pyvark has no write
+methods, so purging, unpurging and deleting stay with the Go CLI.
+
+### Changed
+
+- Version state `purged` now means a soft purge: the version is
+  withdrawn but still listed and downloadable, and its entry adds
+  `purged`, `purged_by` and `purge_reason`. It is not an error any more.
+  `get_artefact_version` returns it with `purge: {purged, purged_by,
+  purge_reason}` (`None` for other versions).
+- `download_artefact` and `download_artefact_file` download a
+  soft-purged version as usual and emit the new `ArtefactPurgedWarning`
+  (who, when and why); `warnings.simplefilter('error',
+  ArtefactPurgedWarning)` makes it an error before any file is fetched.
+- New `ArtefactDeletedError` for 410 `deleted` (an admin's permanent
+  removal; `tombstone` adds `deleted`, `deleted_by`, `delete_reason`)
+  and `ArtefactDeletingError` for 409 `deleting`. `ArtefactPurgedError`
+  and `ArtefactPurgingError` stay as aliases of them, and the old words
+  `purged` (410) and `purging` (409) of servers before the two-stage
+  purge map to the same classes, so existing `except` clauses keep
+  working. They are no longer raised for a soft-purged version.
+- `list_artefact_purges(state=None, action=None)`: the new `action`
+  filter (`soft`, `unpurge`, `hard`; 422 `invalid_action`), and rows
+  carry `id` and `action` (requests from before the two-stage purge are
+  `hard`).
+- Docstrings of `get_artefact`, `get_artefact_versions`,
+  `get_artefact_version` and the download methods describe the states
+  `live`, `purged`, `deleting`, `deleted`; README updated.
+
+### Tests
+
+- Offline: deleted and deleting answers (and the old words), the
+  aliases, a soft-purged version returned with `purge`, downloads that
+  warn (and fail when the warning is an error), no warning for a live
+  version, the `action` filter and `invalid_action` (79 tests in
+  `tests/test_artefacts_offline.py`).
+- Integration against the branch (f2386ef): a deleted version's 410
+  tombstone, a soft-purged version listed, served and downloaded with
+  the warning, `action` on `/artefacts/purges` (13 tests).
+
 ## 0.12.1 (2026-10-20)
 
 Polish for PyPI readers and older servers. `API_TARGET` stays "2.47.0".

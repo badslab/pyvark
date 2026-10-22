@@ -441,10 +441,14 @@ dataset or one collection (a DE table, figures, a notebook, a model).
 Its reference is `<group_id>/<scope>/<artefact_id>[@v<N>]`: the scope is
 the dataset's file id (`SMI` of `S19/SMI`) or `_group` for the
 collection. Without `@v<N>` it means the latest live version. A
-published version never changes; a purged one stays as a tombstone.
+published version never changes. Removing one takes two steps: its
+owner or an admin can purge it (soft: the version is marked withdrawn,
+with who and why, but its files stay listed and downloadable, and an
+unpurge makes it live again), and an admin can then delete it for good,
+which leaves a tombstone.
 
 ```python
-from vark import AnthiveClient, ArtefactIntegrityError, ArtefactPurgedError
+from vark import AnthiveClient, ArtefactDeletedError, ArtefactIntegrityError
 
 c = AnthiveClient("https://my.anthive/api")
 
@@ -457,7 +461,7 @@ detail = c.get_artefact("AT6/_group/atlas-umap")
 detail["versions"]              # [{version, state, published}, ...]
 detail["manifest"]["made_from"]  # datasets and versions it was made from
 detail["manifest"]["declared"]   # author, software, code, as stated
-c.get_artefact_versions("AT6/_group/atlas-umap")  # tombstones too
+c.get_artefact_versions("AT6/_group/atlas-umap")  # purged and deleted ones too
 
 # Download one version into a folder; every file is checked against
 # the manifest's sha256 and the manifest is written beside the files.
@@ -469,8 +473,8 @@ png = c.download_artefact_file("AT6/_group/atlas-umap", "a.png")  # bytes
 c.list_collections()["collections"]
 [row["group_id"] for row in c.list_analysis_collections()]
 
-# Your purge requests (requested with `vark artefacts purge`).
-c.list_artefact_purges(state="needs_decision")
+# Your purge, unpurge and delete requests (made with the Go CLI).
+c.list_artefact_purges(action="soft", state="done")
 ```
 
 The download route answers with a 307 to a presigned S3 link that
@@ -481,9 +485,13 @@ signed URL out of logs and exceptions. A file is written as
 is removed and `ArtefactIntegrityError` is raised. Other refusals have
 their own classes: `ArtefactNotFoundError` (also for an artefact you
 may not see), `ArtefactFileNotFoundError` (the version has no such
-file), `ArtefactPurgedError` (with `tombstone`),
+file), `ArtefactDeletedError` (a deleted version, with `tombstone`;
+`ArtefactPurgedError` is an older name for it), `ArtefactDeletingError`,
 `ArtefactNotOnThisSiteError`, `ArtefactStorageUnavailableError` and
-`ArtefactRateLimitedError` (both with `retry_after`).
+`ArtefactRateLimitedError` (both with `retry_after`). A soft-purged
+version is not an error: it downloads normally, its version payload has
+`purge` (`{purged, purged_by, purge_reason}`), and the download emits
+`ArtefactPurgedWarning`.
 
 ## Donor-level facet tests
 
