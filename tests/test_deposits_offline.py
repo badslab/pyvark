@@ -35,7 +35,7 @@ DEPOSIT_METHODS = ('list_deposits', 'get_deposit', 'get_deposit_report',
 
 def test_version_and_target():
     assert vark.__version__ == '0.12.2'
-    assert AnthiveClient.API_TARGET == '2.47.0'
+    assert AnthiveClient.API_TARGET == '2.48.0'
 
 
 def test_no_upload_methods_and_docs_point_to_vark():

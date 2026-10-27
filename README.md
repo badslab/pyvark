@@ -21,7 +21,7 @@ The package is called `pyvark` on PyPI and is imported as `vark`.
 | 0.12.x | 2.46 and newer; the artefact store and collection listing need 2.47.0+, `search` and `stats` 2.48.0+ |
 
 `AnthiveClient.API_TARGET` names the API version a release was checked
-against (0.12.1: 2.47.0). On an older server the methods it does not
+against (0.12.1: 2.47.0, 0.12.2: 2.48.0). On an older server the methods it does not
 have raise a clear error: artefact and collection calls on a 2.46
 server raise `ServerTooOldError` ("needs anthive REST API 2.47.0+")
 instead of a bare 404, and `search` and `stats` on a server before

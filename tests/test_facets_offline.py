@@ -466,7 +466,7 @@ SCOPE_METHODS = [
 
 
 def test_api_target_and_constants():
-    assert AnthiveClient.API_TARGET == '2.47.0'
+    assert AnthiveClient.API_TARGET == '2.48.0'
     assert AnthiveClient.FACET_SCOPES == (
         'human_postmortem', 'xenograft_human_in_mouse', 'in_vitro')
     assert AnthiveClient.DEFAULT_FACET_SCOPE == 'human_postmortem'

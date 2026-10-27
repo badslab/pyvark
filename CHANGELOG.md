@@ -3,16 +3,17 @@
 Versioned record of the Python client. The targeted REST API version is
 recorded in `vark.AnthiveClient.API_TARGET`.
 
-## 0.12.2 (unreleased)
+## 0.12.2 (2026-10-27)
 
-Follows the two-stage artefact purge of the anthive 2.47 branch (live on
-the dev site). `API_TARGET` stays "2.47.0". pyvark has no write
-methods, so purging, unpurging and deleting stay with the Go CLI.
+Released with anthive REST API 2.48.0. `API_TARGET` is now "2.48.0".
+Adds the catalogue search and front-page numbers of 2.48 and follows
+the two-stage artefact purge. pyvark has no write methods, so purging,
+unpurging and deleting stay with the Go CLI.
 
 ### Added
 
 - `search(q, limit=None, kind=None, format='json')` for `GET /search`
-  (anthive REST API 2.48.0, unreleased): the catalogue keyword search
+  (anthive REST API 2.48.0): the catalogue keyword search
   of the web front page, grouped by kind. Returns the server's dict
   (`datasets`, `collections`, `genes`, `genesets`, `papers`,
   `artefacts`, `facets`, `help`, each with its `n_*` count; a group the
@@ -25,7 +26,7 @@ methods, so purging, unpurging and deleting stay with the Go CLI.
 - On a server without these routes (FastAPI's bare 404) both raise
   `ServerTooOldError` with `required_version` "2.48.0" and a message
   that names the server's version and says it needs anthive REST API
-  2.48.0+. `API_TARGET` stays "2.47.0" until 2.48 is released.
+  2.48.0+.
 
 ### Changed
 
@@ -68,6 +69,11 @@ methods, so purging, unpurging and deleting stay with the Go CLI.
 - Integration against the branch (f2386ef): a deleted version's 410
   tombstone, a soft-purged version listed, served and downloaded with
   the warning, `action` on `/artefacts/purges` (13 tests).
+- Release check on 2026-10-27: 374 offline tests pass. Against the
+  anthive4 tree with the 2.48.0 code, the throw-away server suites pass
+  (artefacts 13, server 16 with 2 skipped), and the smoke suites on the
+  dev API pass apart from the major.minor check, because that build
+  still called itself 2.47.2. `search` with `kind` now filters there.
 
 ## 0.12.1 (2026-10-20)
 

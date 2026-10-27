@@ -4,8 +4,9 @@ Targets the anthive REST API contract. See
 `https://codeberg.org/mfiers/pyvark` for sources and
 `https://codeberg.org/mfiers/vark` for the Go CLI that ships the same surface.
 
-API surface verified against **REST API 2.47.0** (read-only artefact
-store: listing, versions, provenance and verified downloads; read-only
+API surface verified against **REST API 2.48.0** (catalogue search
+and front-page numbers, read-only artefact store: listing, versions,
+provenance and verified downloads; read-only
 dataset deposit status for depositors and admins, facet tests with
 facet scopes, replication with an effect gate and forest rows, module
 replication, per-donor values and plots, donor variability, gene set
@@ -348,7 +349,7 @@ class AnthiveClient:
     """
 
     #: Anthive REST API version this client release was last verified against.
-    API_TARGET = "2.47.0"
+    API_TARGET = "2.48.0"
 
     #: Server-side plot geoms the client knows about. Validation prevents a
     #: round-trip on typos. Update with every new server geom.

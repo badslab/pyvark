@@ -1,5 +1,5 @@
 """Offline tests for the catalogue search and the front-page numbers
-(anthive REST API 2.48.0, unreleased): ``AnthiveClient.search`` for
+(anthive REST API 2.48.0): ``AnthiveClient.search`` for
 ``GET /search`` and ``AnthiveClient.stats`` for ``GET /stats``. HTTP is
 mocked with the recorder from ``test_library_offline``.
 
