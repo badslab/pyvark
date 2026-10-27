@@ -9,6 +9,24 @@ Follows the two-stage artefact purge of the anthive 2.47 branch (live on
 the dev site). `API_TARGET` stays "2.47.0". pyvark has no write
 methods, so purging, unpurging and deleting stay with the Go CLI.
 
+### Added
+
+- `search(q, limit=None, kind=None, format='json')` for `GET /search`
+  (anthive REST API 2.48.0, unreleased): the catalogue keyword search
+  of the web front page, grouped by kind. Returns the server's dict
+  (`datasets`, `collections`, `genes`, `genesets`, `papers`,
+  `artefacts`, `facets`, `help`, each with its `n_*` count; a group the
+  site lacks is `None`). `kind` takes one name or a list from the new
+  `AnthiveClient.SEARCH_KINDS` and is sent as a comma list; an unknown
+  name raises `ValueError` before any request. `format='dataframe'`
+  with exactly one `kind` returns that group's rows as a DataFrame.
+- `stats()` for `GET /stats` (REST API 2.48.0): the front-page numbers
+  for the caller, passed through as the server sends them.
+- On a server without these routes (FastAPI's bare 404) both raise
+  `ServerTooOldError` with `required_version` "2.48.0" and a message
+  that names the server's version and says it needs anthive REST API
+  2.48.0+. `API_TARGET` stays "2.47.0" until 2.48 is released.
+
 ### Changed
 
 - Version state `purged` now means a soft purge: the version is
@@ -37,6 +55,11 @@ methods, so purging, unpurging and deleting stay with the Go CLI.
 
 ### Tests
 
+- Offline: `search` and `stats` (parameters, `kind` forms and
+  validation, DataFrame output, null groups, 422, the 2.48 too-old
+  check; 24 tests in `tests/test_search_offline.py`). Checked by hand
+  against the dev API (2.47.2 with the unreleased 2.48 routes; that
+  build does not filter on `kind` yet).
 - Offline: deleted and deleting answers (and the old words), the
   aliases, a soft-purged version returned with `purge`, downloads that
   warn (and fail when the warning is an error), no warning for a live

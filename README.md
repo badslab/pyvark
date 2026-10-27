@@ -18,13 +18,15 @@ The package is called `pyvark` on PyPI and is imported as `vark`.
 
 | pyvark | anthive REST API |
 | --- | --- |
-| 0.12.x | 2.46 and newer; the artefact store and collection listing need 2.47.0+ |
+| 0.12.x | 2.46 and newer; the artefact store and collection listing need 2.47.0+, `search` and `stats` 2.48.0+ |
 
 `AnthiveClient.API_TARGET` names the API version a release was checked
 against (0.12.1: 2.47.0). On an older server the methods it does not
 have raise a clear error: artefact and collection calls on a 2.46
 server raise `ServerTooOldError` ("needs anthive REST API 2.47.0+")
-instead of a bare 404. `get_version()["compatible_pyvark"]` tells you
+instead of a bare 404, and `search` and `stats` on a server before
+2.48 raise it with "needs anthive REST API 2.48.0+".
+`get_version()["compatible_pyvark"]` tells you
 the oldest pyvark a server works with.
 
 ## Install
@@ -208,6 +210,14 @@ discovery automatically (no filesystem in the browser).
   catalog + per-collection landing-page data (API 2.5+). Rows carry the
   lineage fields `designation`, `reanalysis_of`, `donor_group` and
   `has_donor_uid` on current servers.
+* Catalogue search (API 2.48.0): `search(q, limit=None, kind=None)`
+  is the keyword search of the web front page, grouped by kind
+  (`datasets`, `collections`, `genes`, `genesets`, `papers`,
+  `artefacts`, `facets`, `help`; `AnthiveClient.SEARCH_KINDS`). A group
+  the site lacks is `None`. `kind='papers', format='dataframe'` gives
+  one group as a DataFrame. `stats()` returns the front-page numbers
+  for you (datasets, cells, genes, gene sets, papers, artefacts you may
+  see). See [Search](#search).
 * `get_donor_groups`: datasets that share a donor pool (do not count
   them as independent donors).
 * `get_plot(db_id, geom, ...)`: every server-side geom: `scatter`,
@@ -323,6 +333,32 @@ discovery automatically (no filesystem in the browser).
   raises `AnthiveWarmingUpError`.
 * `pick_fastest(base_urls, ...)`: a server-selection helper that
   consumes `/health` latency telemetry.
+
+## Search
+
+The search box of the web front page, as one call (API 2.48.0+). Every
+word must match; filler words are dropped and AD, PD, MS, ALS, FTD and
+APOE4 are expanded. Only what you may see is searched.
+
+```python
+hits = client.search("TREM2 microglia Alzheimer", limit=10)
+hits["n_datasets"], [row["db_id"] for row in hits["datasets"]]
+hits["genes"]                      # [{"gene": "TREM2", "n_datasets": ...}]
+hits["papers"][0]["passages"]      # page, section and snippet per hit
+
+# Only some groups (sent as kind=genes,papers).
+client.search("TREM2", kind=["genes", "papers"])
+
+# One group as a DataFrame (needs pandas).
+datasets = client.search("astrocyte", kind="datasets", format="dataframe")
+
+# The numbers on the front page, for you.
+numbers = client.stats()
+numbers["n_datasets"], numbers["n_cells"], numbers["n_papers"]
+```
+
+`n_genes` and `n_papers` are `None` on a site without a gene index or
+a library. Donors are not counted.
 
 ## Paper library
 
